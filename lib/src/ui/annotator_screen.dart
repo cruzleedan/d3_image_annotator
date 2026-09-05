@@ -104,55 +104,85 @@ class _D3AnnotatorScreenState extends State<D3AnnotatorScreen> {
       child: SafeArea(
         child: Column(
           children: [
-            _TopBar(
-              controller: widget.controller,
-              zoom: _zoom,
-              onClose: _close,
-              onDone: widget.onDone,
-              doneLabel: widget.doneLabel,
+            _ControlSurface(
+              child: _TopBar(
+                controller: widget.controller,
+                zoom: _zoom,
+                onClose: _close,
+                onDone: widget.onDone,
+                doneLabel: widget.doneLabel,
+              ),
             ),
             Expanded(
-              child: D3ImageAnnotator(
-                image: widget.image,
-                imageSize: widget.imageSize,
-                controller: widget.controller,
-                tool: _tool,
-                fit: widget.fit,
-                backgroundColor: widget.backgroundColor,
-                transformationController: _zoom,
-                cropping: _cropping,
-                onCropChanged: (rect) => _pendingCrop = rect,
+              // ClipRect: zooming scales the image past its box, and
+              // without a clip it paints over the bars above and below.
+              // White controls then vanish against a zoomed white photo
+              // -- reported on-device.
+              child: ClipRect(
+                child: D3ImageAnnotator(
+                  image: widget.image,
+                  imageSize: widget.imageSize,
+                  controller: widget.controller,
+                  tool: _tool,
+                  fit: widget.fit,
+                  backgroundColor: widget.backgroundColor,
+                  transformationController: _zoom,
+                  cropping: _cropping,
+                  onCropChanged: (rect) => _pendingCrop = rect,
+                ),
               ),
             ),
             if (_cropping)
-              _CropBar(
-                onCancel: () => setState(() {
-                  _cropping = false;
-                  _pendingCrop = null;
-                }),
-                onApply: () => setState(() {
-                  final rect = _pendingCrop;
-                  if (rect != null) widget.controller.crop(rect);
-                  _cropping = false;
-                  _pendingCrop = null;
-                }),
+              _ControlSurface(
+                child: _CropBar(
+                  onCancel: () => setState(() {
+                    _cropping = false;
+                    _pendingCrop = null;
+                  }),
+                  onApply: () => setState(() {
+                    final rect = _pendingCrop;
+                    if (rect != null) widget.controller.crop(rect);
+                    _cropping = false;
+                    _pendingCrop = null;
+                  }),
+                ),
               )
             else
-              _BottomBars(
-                controller: widget.controller,
-                tool: _tool,
-                group: _group,
-                onToolChanged: (t) => setState(() => _tool = t),
-                onGroupChanged: (g) => setState(() => _group = g),
-                onStartCrop: () => setState(() {
-                  _cropping = true;
-                  _pendingCrop = widget.controller.transform.effectiveCrop;
-                }),
+              _ControlSurface(
+                child: _BottomBars(
+                  controller: widget.controller,
+                  tool: _tool,
+                  group: _group,
+                  onToolChanged: (t) => setState(() => _tool = t),
+                  onGroupChanged: (g) => setState(() => _group = g),
+                  onStartCrop: () => setState(() {
+                    _cropping = true;
+                    _pendingCrop = widget.controller.transform.effectiveCrop;
+                  }),
+                ),
               ),
           ],
         ),
       ),
     );
+  }
+}
+
+/// Gives the control bars their own opaque surface.
+///
+/// The bars cannot rely on the page behind them: a zoomed image paints
+/// right up to their edge, and `backgroundColor` is a consumer setting
+/// that could be light. White controls over a white photo are
+/// unreadable -- reported on-device. A dedicated scrim keeps contrast
+/// a property of the controls rather than a coincidence of the image.
+class _ControlSurface extends StatelessWidget {
+  const _ControlSurface({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(color: const Color(0xE6000000), child: child);
   }
 }
 
@@ -205,7 +235,10 @@ class _TopBar extends StatelessWidget {
               onPressed: done,
               style: TextButton.styleFrom(
                 foregroundColor: Colors.amber,
-                minimumSize: const Size(kMinimumTouchTarget, kMinimumTouchTarget),
+                minimumSize: const Size(
+                  kMinimumTouchTarget,
+                  kMinimumTouchTarget,
+                ),
               ),
               child: Text(doneLabel),
             ),

@@ -182,4 +182,60 @@ void main() {
       expect(find.text('Apply crop'), findsNothing);
     });
   });
+
+  group('controls stay legible over the image', () {
+    testWidgets('the image is clipped so it cannot paint over the bars', (
+      tester,
+    ) async {
+      // Zooming scales the image past its box. Without a clip it paints
+      // over the bars above and below, and white controls vanish against
+      // a zoomed white photo -- reported on-device.
+      await pumpScreen(tester);
+
+      final clip = find.ancestor(
+        of: find.byType(D3ImageAnnotator),
+        matching: find.byType(ClipRect),
+      );
+      expect(clip, findsWidgets);
+    });
+
+    testWidgets('the bars carry their own opaque background', (tester) async {
+      // Clipping alone is not enough: backgroundColor is a consumer
+      // setting that could be light, so contrast has to be a property
+      // of the controls rather than of whatever is behind them.
+      await pumpScreen(tester);
+
+      final surfaces = tester
+          .widgetList<ColoredBox>(
+            find.ancestor(
+              of: find.byIcon(Icons.close),
+              matching: find.byType(ColoredBox),
+            ),
+          )
+          .toList();
+
+      expect(surfaces, isNotEmpty,
+          reason: 'the top bar needs a surface of its own');
+      expect(
+        surfaces.any((box) => box.color.a > 0.8),
+        isTrue,
+        reason: 'that surface must be near-opaque to guarantee contrast',
+      );
+    });
+
+    testWidgets('the tool bar carries one too', (tester) async {
+      await pumpScreen(tester);
+
+      final surfaces = tester
+          .widgetList<ColoredBox>(
+            find.ancestor(
+              of: find.text('Select'),
+              matching: find.byType(ColoredBox),
+            ),
+          )
+          .toList();
+
+      expect(surfaces.any((box) => box.color.a > 0.8), isTrue);
+    });
+  });
 }
