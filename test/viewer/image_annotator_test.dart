@@ -33,6 +33,7 @@ void main() {
     TransformationController? transform,
     bool enableZoom = true,
     AnnotationController? controller,
+    bool cropping = false,
   }) async {
     tester.view.physicalSize = viewport;
     tester.view.devicePixelRatio = 1.0;
@@ -61,6 +62,7 @@ void main() {
               tool: tool,
               enableZoom: enableZoom,
               transformationController: transform,
+              cropping: cropping,
             ),
           ),
         ),
@@ -443,6 +445,66 @@ void main() {
 
       final imageRect = tester.getRect(find.byType(ClipRect).first);
       expect(imageRect.width / imageRect.height, closeTo(0.25, 0.01));
+    });
+  });
+
+  group('crop mode leaves room for the back gesture', () {
+    // Measure the RawImage's painted rect: ClipRect only exists once a
+    // crop has been applied, and these cases start from no crop at all.
+    Rect imageRect(WidgetTester tester) =>
+        tester.getRect(find.byType(RawImage).first);
+
+    testWidgets('the image is inset so handles clear the screen edges', (
+      tester,
+    ) async {
+      // On a gesture-nav device the left and right screen edges are
+      // Android's back-gesture zone. With the crop frame's corners
+      // against them, dragging a left-hand corner navigates back instead
+      // of resizing -- the handle is effectively ungrabbable. Google
+      // Photos insets the image during crop for the same reason.
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+
+      await pump(tester, controller: c);
+      final uncropped = imageRect(tester);
+
+      await pump(tester, controller: c, cropping: true);
+      final inCropMode = imageRect(tester);
+
+      expect(inCropMode.left, greaterThan(uncropped.left),
+          reason: 'the image must pull away from the left edge');
+      expect(inCropMode.right, lessThan(uncropped.right));
+      expect(inCropMode.width, lessThan(uncropped.width));
+    });
+
+    testWidgets('the inset applies only while cropping', (tester) async {
+      // Shrinking the image the rest of the time would waste space for
+      // no benefit.
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+
+      await pump(tester, controller: c, cropping: true);
+      final cropping = imageRect(tester);
+
+      await pump(tester, controller: c);
+      final normal = imageRect(tester);
+
+      expect(normal.width, greaterThan(cropping.width));
+      expect(normal.left, lessThan(cropping.left));
+    });
+
+    testWidgets('the crop frame is inset by at least a finger width', (
+      tester,
+    ) async {
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+      await pump(tester, controller: c, cropping: true);
+
+      final rect = imageRect(tester);
+
+      // Comfortably outside the ~20dp Android reserves each side.
+      expect(rect.left, greaterThanOrEqualTo(20));
+      expect(viewport.width - rect.right, greaterThanOrEqualTo(20));
     });
   });
 }
