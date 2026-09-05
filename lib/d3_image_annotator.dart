@@ -41,6 +41,10 @@ export 'src/geometry/image_transform.dart';
 export 'src/ui/annotator_screen.dart';
 export 'src/ui/tool_button.dart';
 
+// Rendering: flatten annotations into image bytes for output
+export 'src/render/render_annotated_image.dart';
+export 'src/render/render_options.dart';
+
 // Viewer
 export 'src/viewer/crop_overlay.dart';
 export 'src/viewer/image_annotator.dart';
