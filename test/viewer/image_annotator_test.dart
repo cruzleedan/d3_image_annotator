@@ -281,7 +281,16 @@ void main() {
       final stored = (rotated.annotations.single as RectangleAnnotation).rect;
 
       // Mapping the stored corners forward through the same transform
-      // should land back near where the drag ended in view space.
+      // should land back where the drag actually happened in view
+      // space.
+      //
+      // Note the expected values are NOT 0.25..0.6. `at()` computes
+      // pixels against the *unrotated* content rect (500x1000, inset at
+      // x=250), but a quarter turn makes the rotated rect 1000x500 and
+      // full-bleed -- so the same pixels sit at a different fraction of
+      // it. x=375px is 0.375 of 1000, not 0.25. Asserting 0.25 here is
+      // what the earlier version did, and it only passed while the
+      // overlay was wrongly measuring the untransformed size.
       final mappedEnd = rotated.transform.mapPoint(
         NormalizedPoint(stored.right, stored.bottom),
       );
@@ -289,11 +298,9 @@ void main() {
         NormalizedPoint(stored.left, stored.top),
       );
 
-      // The drag covered view-space 0.25..0.6 on both axes; the mapped
-      // corners should span roughly that, in some corner order.
       final xs = [mappedStart.x, mappedEnd.x]..sort();
-      expect(xs.first, closeTo(0.25, 0.08));
-      expect(xs.last, closeTo(0.6, 0.08));
+      expect(xs.first, closeTo(0.375, 0.03));
+      expect(xs.last, closeTo(0.55, 0.03));
     });
 
     testWidgets('existing marks are unchanged by rotating', (tester) async {
@@ -333,6 +340,59 @@ void main() {
       c.crop(null);
       await tester.pumpAndSettle();
       expect(c.annotations, hasLength(1));
+    });
+  });
+
+  group('the overlay is sized to the transformed image', () {
+    testWidgets('rotating resizes the annotation box with the image', (
+      tester,
+    ) async {
+      // The bug this pins: the image is laid out by BoxFit against the
+      // *rotated* dimensions, so a portrait photo shrinks when turned
+      // sideways in a portrait viewport. The overlay was still measuring
+      // the untransformed size, so marks rotated correctly but came out
+      // oversized -- drawn against a box bigger than the picture.
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+      await pump(tester, controller: c);
+
+      final before = tester.getSize(find.byType(CustomPaint).first);
+
+      c.rotateClockwise();
+      await tester.pumpAndSettle();
+
+      // 500x1000 image in a 1000x1000 viewport: contain gives 500x1000
+      // upright, and 1000x500 on its side. The painted content must
+      // follow, not stay 500x1000.
+      final overlay = tester.widget<AnnotationOverlay>(
+        find.byType(AnnotationOverlay),
+      );
+      final rect = computeImageContentRect(
+        widgetSize: before,
+        contentSize: overlay.imageTransform.resultSize(overlay.imageSize),
+        fit: overlay.fit,
+      );
+
+      expect(rect.width, closeTo(1000, 1));
+      expect(rect.height, closeTo(500, 1));
+    });
+
+    testWidgets('cropping shrinks the annotation box too', (tester) async {
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+      await pump(tester, controller: c);
+
+      c.crop(NormalizedRect(left: 0.25, top: 0.25, right: 0.75, bottom: 0.75));
+      await tester.pumpAndSettle();
+
+      final overlay = tester.widget<AnnotationOverlay>(
+        find.byType(AnnotationOverlay),
+      );
+      final result = overlay.imageTransform.resultSize(overlay.imageSize);
+
+      // Half the image in each axis.
+      expect(result.width, closeTo(250, 1));
+      expect(result.height, closeTo(500, 1));
     });
   });
 }

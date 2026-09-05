@@ -111,9 +111,19 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     return 'a${DateTime.now().microsecondsSinceEpoch}_${_idCounter++}';
   }
 
+  /// Where the *transformed* image sits inside this widget.
+  ///
+  /// Sized against the transform result size, not the raw imageSize: a quarter
+  /// turn swaps the image pixel dimensions, so a portrait photo laid
+  /// out under `contain` in a portrait viewport shrinks noticeably when
+  /// rotated. The image itself is laid out that way by BoxFit, so an
+  /// overlay measuring the untransformed size would draw annotations
+  /// against a box larger than the picture -- marks would rotate
+  /// correctly but come out oversized. A crop shrinks the result the
+  /// same way.
   Rect _contentRect(Size widgetSize) => computeImageContentRect(
     widgetSize: widgetSize,
-    contentSize: widget.imageSize,
+    contentSize: widget.imageTransform.resultSize(widget.imageSize),
     fit: widget.fit,
   );
 
