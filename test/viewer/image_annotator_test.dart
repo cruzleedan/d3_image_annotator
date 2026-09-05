@@ -177,6 +177,21 @@ void main() {
     });
   });
 
+  group('gesture ownership', () {
+    testWidgets('there is no InteractiveViewer to compete for pointers', (
+      tester,
+    ) async {
+      // Pins the architecture, because the behavioural version of this
+      // is exactly the test that gave a false pass: two recognizers
+      // cannot share these pointers, so the overlay owns them all and
+      // the transform is driven from the forwarded scale callbacks.
+      await pump(tester);
+
+      expect(find.byType(InteractiveViewer), findsNothing);
+      expect(find.byType(AnnotationOverlay), findsOneWidget);
+    });
+  });
+
   group('image placement and annotation placement agree', () {
     test('computeImageContentRect matches what BoxFit.contain produces', () {
       // The viewer paints the image with BoxFit and places annotations

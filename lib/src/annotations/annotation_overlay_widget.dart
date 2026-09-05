@@ -9,7 +9,6 @@ import 'annotation.dart';
 import 'annotation_controller.dart';
 import 'annotation_painter.dart';
 import 'annotation_tool.dart';
-import '../viewer/single_pointer_pan_recognizer.dart';
 import 'hit_testing.dart';
 
 /// Draws [controller]'s annotations and creates new ones by gesture.
@@ -31,6 +30,10 @@ class AnnotationOverlay extends StatefulWidget {
     this.tool = AnnotationTool.rectangle,
     this.fit = ImageFit.contain,
     this.idGenerator,
+    this.transform,
+    this.onScaleStart,
+    this.onScaleUpdate,
+    this.onScaleEnd,
   });
 
   final AnnotationController controller;
@@ -50,6 +53,27 @@ class AnnotationOverlay extends StatefulWidget {
   /// ids; defaults to a timestamp-plus-counter, which is unique within
   /// a session without pulling in a uuid dependency.
   final String Function()? idGenerator;
+
+  /// Zoom/pan currently applied to the image beneath this overlay.
+  ///
+  /// Null means "no transform" -- the overlay is a direct sibling of an
+  /// untransformed image, or is itself inside the transformed subtree.
+  /// When the overlay sits *outside* an `InteractiveViewer` (which it
+  /// must, so the viewer's scale recognizer does not swallow one-finger
+  /// strokes), pass the viewer's matrix here: the overlay then paints
+  /// through it and inverts it to turn pointer positions back into
+  /// image coordinates.
+  final Matrix4? transform;
+
+  /// Multi-finger gestures, forwarded so a host can drive zoom/pan.
+  ///
+  /// The overlay owns *all* pointers -- see build() for why two
+  /// competing recognizers cannot share them -- so a zooming host
+  /// cannot use its own gesture detector and must be fed from here.
+  final void Function(ScaleStartDetails)? onScaleStart;
+  final void Function(ScaleUpdateDetails)? onScaleUpdate;
+  final void Function(ScaleEndDetails)? onScaleEnd;
+
 
   @override
   State<AnnotationOverlay> createState() => _AnnotationOverlayState();
@@ -71,6 +95,7 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
 
   int _idCounter = 0;
 
+
   String _nextId() {
     final generator = widget.idGenerator;
     if (generator != null) return generator();
@@ -83,7 +108,21 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     fit: widget.fit,
   );
 
-  void _onPanStart(Offset local, Rect contentRect) {
+  /// Undoes the zoom/pan so a screen position becomes a position in the
+  /// untransformed image box. Must happen *before* clamping to the
+  /// content rect: under zoom the visible area is a subset of the
+  /// image, and clamping first would pin strokes to the viewport edge
+  /// instead of the image edge.
+  Offset _toImageSpace(Offset local) {
+    final matrix = widget.transform;
+    if (matrix == null) return local;
+    final inverted = Matrix4.tryInvert(matrix);
+    if (inverted == null) return local;
+    return MatrixUtils.transformPoint(inverted, local);
+  }
+
+  void _onPanStart(Offset localRaw, Rect contentRect) {
+    final local = _toImageSpace(localRaw);
     final point = toNormalized(local, contentRect);
 
     if (widget.tool == AnnotationTool.select) {
@@ -130,7 +169,8 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     });
   }
 
-  void _onPanUpdate(Offset local, Rect contentRect) {
+  void _onPanUpdate(Offset localRaw, Rect contentRect) {
+    final local = _toImageSpace(localRaw);
     final point = toNormalized(local, contentRect);
 
     if (widget.tool == AnnotationTool.select) {
@@ -170,6 +210,15 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     if (moved != null) widget.controller.update(id, moved);
   }
 
+  /// Drops an in-progress stroke without committing it.
+  void _abandonDraft() {
+    if (_draft == null && _dragStart == null) return;
+    setState(() {
+      _draft = null;
+      _dragStart = null;
+    });
+  }
+
   void _onPanEnd() {
     if (widget.tool == AnnotationTool.select) {
       _movingId = null;
@@ -202,45 +251,52 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
           animation: widget.controller,
           builder: (context, _) {
             final draft = _draft;
-            // RawGestureDetector with a single-pointer recognizer, not
-            // a plain GestureDetector: inside an InteractiveViewer the
-            // latter wins the arena on the first pointer and swallows
-            // the pinch, so two-finger zoom would never reach the
-            // viewer. See SinglePointerPanGestureRecognizer.
+
+            // ONE gesture detector owns both drawing and zoom.
             //
-            // Positions arrive in this widget's own local space. When
-            // this sits inside an InteractiveViewer it *is* the
-            // transformed child, so local coordinates are already
-            // untransformed image-box coordinates -- no inverse matrix
-            // is needed here, and applying one would double-correct.
-            return RawGestureDetector(
+            // Two competing recognizers cannot share these pointers:
+            // ScaleGestureRecognizer accepts single-pointer gestures, so
+            // an InteractiveViewer beneath wins every one-finger drag,
+            // and a drawing recognizer that merely declines still
+            // starves the viewer's arena. Whichever way they are nested,
+            // one always wins -- confirmed by probe and on-device.
+            //
+            // onScale* reports pointerCount, so a single detector can
+            // route one finger to drawing and two to zoom without any
+            // arena contention at all.
+            return GestureDetector(
               behavior: HitTestBehavior.opaque,
-              gestures: <Type, GestureRecognizerFactory>{
-                SinglePointerPanGestureRecognizer:
-                    GestureRecognizerFactoryWithHandlers<
-                      SinglePointerPanGestureRecognizer
-                    >(
-                      () => SinglePointerPanGestureRecognizer(
-                        debugOwner: this,
-                      ),
-                      (recognizer) {
-                        recognizer.onStart = (d) =>
-                            _onPanStart(d.localPosition, contentRect);
-                        recognizer.onUpdate = (d) =>
-                            _onPanUpdate(d.localPosition, contentRect);
-                        recognizer.onEnd = (_) => _onPanEnd();
-                      },
-                    ),
+              onScaleStart: (d) {
+                if (d.pointerCount > 1) {
+                  _abandonDraft();
+                  widget.onScaleStart?.call(d);
+                } else {
+                  _onPanStart(d.localFocalPoint, contentRect);
+                }
               },
-              child: CustomPaint(
-                size: widgetSize,
-                painter: AnnotationPainter(
-                  annotations: [
-                    ...widget.controller.annotations,
-                    ?draft,
-                  ],
-                  contentRect: contentRect,
-                  selectedId: widget.controller.selectedId,
+              onScaleUpdate: (d) {
+                if (d.pointerCount > 1) {
+                  // A pinch may begin as one finger; drop any stroke it
+                  // started before the second landed.
+                  _abandonDraft();
+                  widget.onScaleUpdate?.call(d);
+                } else if (_draft != null || _movingId != null) {
+                  _onPanUpdate(d.localFocalPoint, contentRect);
+                }
+              },
+              onScaleEnd: (d) {
+                widget.onScaleEnd?.call(d);
+                _onPanEnd();
+              },
+              child: _MaybeTransformed(
+                transform: widget.transform,
+                child: CustomPaint(
+                  size: widgetSize,
+                  painter: AnnotationPainter(
+                    annotations: [...widget.controller.annotations, ?draft],
+                    contentRect: contentRect,
+                    selectedId: widget.controller.selectedId,
+                  ),
                 ),
               ),
             );
@@ -352,5 +408,21 @@ Annotation? _translate(Annotation annotation, double dx, double dy) {
           for (final p in points) NormalizedPoint(p.x + dx, p.y + dy),
         ],
       );
+  }
+}
+
+/// Applies [transform] when there is one, and gets out of the way when
+/// there is not -- an identity `Transform` would still force a layer.
+class _MaybeTransformed extends StatelessWidget {
+  const _MaybeTransformed({required this.transform, required this.child});
+
+  final Matrix4? transform;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final matrix = transform;
+    if (matrix == null) return child;
+    return Transform(transform: matrix, child: child);
   }
 }

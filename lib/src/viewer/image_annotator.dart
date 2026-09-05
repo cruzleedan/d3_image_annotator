@@ -93,42 +93,83 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
     super.dispose();
   }
 
+  double _scaleAtGestureStart = 1;
+  Offset _focalAtGestureStart = Offset.zero;
+  Offset _translationAtGestureStart = Offset.zero;
+
+  double get _scale => _transform.value.getMaxScaleOnAxis();
+
+  Offset get _translation {
+    final t = _transform.value.getTranslation();
+    return Offset(t.x, t.y);
+  }
+
+  void _onScaleStart(ScaleStartDetails d) {
+    _scaleAtGestureStart = _scale;
+    _focalAtGestureStart = d.localFocalPoint;
+    _translationAtGestureStart = _translation;
+  }
+
+  /// Rebuilds the matrix from the gesture rather than accumulating
+  /// deltas, so a pinch that returns to its starting spread returns to
+  /// its starting zoom instead of drifting.
+  void _onScaleUpdate(ScaleUpdateDetails d) {
+    if (!widget.enableZoom) return;
+    final scale = (_scaleAtGestureStart * d.scale)
+        .clamp(widget.minScale, widget.maxScale);
+
+    // Keep the point under the fingers pinned while scaling, then apply
+    // the focal point's own movement as a pan.
+    final ratio = scale / _scaleAtGestureStart;
+    final origin = _focalAtGestureStart;
+    final panned = d.localFocalPoint - _focalAtGestureStart;
+    final translation =
+        (_translationAtGestureStart - origin) * ratio + origin + panned;
+
+    _transform.value = Matrix4.identity()
+      ..translateByDouble(translation.dx, translation.dy, 0, 1)
+      ..scaleByDouble(scale, scale, 1, 1);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final content = Stack(
-      fit: StackFit.expand,
-      children: [
-        Image(image: widget.image, fit: _boxFitFor(widget.fit)),
-        AnnotationOverlay(
-          controller: widget.controller,
-          imageSize: widget.imageSize,
-          tool: widget.tool,
-          fit: widget.fit,
-        ),
-      ],
-    );
-
+    // No InteractiveViewer. Two gesture recognizers cannot share these
+    // pointers -- ScaleGestureRecognizer accepts single-pointer
+    // gestures, so a viewer beneath wins every one-finger drag, and a
+    // drawing recognizer that declines still starves the viewer's
+    // arena. Whichever way they nest, one always wins.
+    //
+    // So the overlay owns every pointer and reports pointerCount, and
+    // the transform is driven from here: one finger draws, two fingers
+    // zoom, with no arena contention to lose.
     return ColoredBox(
       color: widget.backgroundColor,
-      child: widget.enableZoom
-          ? InteractiveViewer(
-              transformationController: _transform,
-              minScale: widget.minScale,
-              maxScale: widget.maxScale,
-              // panEnabled MUST be false. It governs *single-finger*
-              // dragging, and InteractiveViewer wins the arena for
-              // those -- with it on, one-finger strokes are eaten as
-              // pans and nothing is ever drawn. Verified on-device:
-              // leaving it true produced no annotations at all.
-              //
-              // Two-finger panning is unaffected: scaleEnabled handles
-              // the scale gesture, which carries translation with it,
-              // so pinch-zoom and two-finger drag both still work.
-              panEnabled: false,
-              scaleEnabled: true,
-              child: content,
-            )
-          : content,
+      child: AnimatedBuilder(
+        animation: _transform,
+        builder: (context, _) {
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              Transform(
+                transform: _transform.value,
+                child: Image(
+                  image: widget.image,
+                  fit: _boxFitFor(widget.fit),
+                ),
+              ),
+              AnnotationOverlay(
+                controller: widget.controller,
+                imageSize: widget.imageSize,
+                tool: widget.tool,
+                fit: widget.fit,
+                transform: _transform.value,
+                onScaleStart: _onScaleStart,
+                onScaleUpdate: _onScaleUpdate,
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 
