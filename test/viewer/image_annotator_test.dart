@@ -395,4 +395,54 @@ void main() {
       expect(result.height, closeTo(500, 1));
     });
   });
+
+  group('image and annotations share one rect after cropping', () {
+    testWidgets('the image is placed in the overlay content rect', (
+      tester,
+    ) async {
+      // The bug this pins: the image used to fill the whole viewport
+      // while the overlay computed an aspect-correct rect for the
+      // cropped result. Cropping changes the aspect ratio, so the two
+      // described different rectangles and every mark sat off its
+      // content once a crop was applied.
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+      await pump(tester, controller: c);
+
+      c.crop(NormalizedRect(left: 0.25, top: 0, right: 0.75, bottom: 1));
+      await tester.pumpAndSettle();
+
+      // ClipRect, not Image: the Image is deliberately oversized inside
+      // the clip (that is how the crop window works), so measuring it
+      // reports the scaled-up source rather than what is visible.
+      final imageRect = tester.getRect(find.byType(ClipRect).first);
+      final overlay = tester.widget<AnnotationOverlay>(
+        find.byType(AnnotationOverlay),
+      );
+      final expected = computeImageContentRect(
+        widgetSize: viewport,
+        contentSize: overlay.imageTransform.resultSize(overlay.imageSize),
+        fit: overlay.fit,
+      );
+
+      expect(imageRect.width, closeTo(expected.width, 1));
+      expect(imageRect.height, closeTo(expected.height, 1));
+    });
+
+    testWidgets('a cropped image keeps the cropped aspect ratio', (
+      tester,
+    ) async {
+      // 500x1000 image cropped to the middle half horizontally is
+      // 250x1000 -- a 1:4 sliver, not the original 1:2.
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+      await pump(tester, controller: c);
+
+      c.crop(NormalizedRect(left: 0.25, top: 0, right: 0.75, bottom: 1));
+      await tester.pumpAndSettle();
+
+      final imageRect = tester.getRect(find.byType(ClipRect).first);
+      expect(imageRect.width / imageRect.height, closeTo(0.25, 0.01));
+    });
+  });
 }

@@ -174,12 +174,38 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
           return Stack(
             fit: StackFit.expand,
             children: [
+              // The image is placed in the *same* content rect the
+              // overlay computes, not simply told to fill the viewport.
+              // Cropping changes the aspect ratio, so a stretched-to-fit
+              // image and an aspect-correct annotation layer end up
+              // describing different rectangles -- marks then sit off
+              // their content once a crop is applied.
               Transform(
                 transform: _transform.value,
-                child: _TransformedImage(
-                  image: widget.image,
-                  fit: _boxFitFor(widget.fit),
-                  imageTransform: widget.controller.transform,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final contentRect = computeImageContentRect(
+                      widgetSize: Size(
+                        constraints.maxWidth,
+                        constraints.maxHeight,
+                      ),
+                      contentSize: widget.controller.transform.resultSize(
+                        widget.imageSize,
+                      ),
+                      fit: widget.fit,
+                    );
+                    return Stack(
+                      children: [
+                        Positioned.fromRect(
+                          rect: contentRect,
+                          child: _TransformedImage(
+                            image: widget.image,
+                            imageTransform: widget.controller.transform,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
               ),
               if (!widget.cropping)
@@ -224,16 +250,12 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
                         ),
                         CropOverlay(
                           contentRect: contentRect,
-                          // An inset frame when nothing is cropped yet.
-                          // Opening at the full frame is technically
-                          // correct but reads as broken: there is no
-                          // dimmed surround to see, and the corner
-                          // handles sit right on the image edge where
-                          // they are awkward to grab. Pixel and iOS both
-                          // open inset for the same reason.
+                          // Opens wrapping the whole image. The frame's
+                          // black border plus white corner arms stay
+                          // visible against any photo, so no inset is
+                          // needed to make the handles findable.
                           initialCrop:
-                              widget.controller.transform.cropRect ??
-                              _defaultCropFrame,
+                              widget.controller.transform.effectiveCrop,
                           onChanged: (rect) =>
                               widget.onCropChanged?.call(rect),
                         ),
@@ -248,10 +270,6 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
     );
   }
 
-  static BoxFit _boxFitFor(ImageFit fit) => switch (fit) {
-    ImageFit.contain => BoxFit.contain,
-    ImageFit.cover => BoxFit.cover,
-  };
 }
 
 /// Draws the image with the rotate / mirror / crop applied.
@@ -262,17 +280,19 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
 class _TransformedImage extends StatelessWidget {
   const _TransformedImage({
     required this.image,
-    required this.fit,
     required this.imageTransform,
   });
 
   final ImageProvider image;
-  final BoxFit fit;
   final ImageTransform imageTransform;
 
   @override
   Widget build(BuildContext context) {
-    Widget child = Image(image: image, fit: fit);
+    // BoxFit.fill, not contain: the caller has already sized this box to
+    // the transformed image's exact aspect ratio, so filling it is
+    // correct and letterboxing inside it would inset the picture away
+    // from the annotations.
+    Widget child = Image(image: image, fit: BoxFit.fill);
 
     final crop = imageTransform.cropRect;
     if (crop != null) {
@@ -307,13 +327,3 @@ class _TransformedImage extends StatelessWidget {
   }
 }
 
-/// Where the crop frame starts when the image has never been cropped.
-///
-/// Inset rather than full-frame so the handles are visible and clear of
-/// the image edge from the moment crop mode opens.
-final NormalizedRect _defaultCropFrame = NormalizedRect(
-  left: 0.1,
-  top: 0.1,
-  right: 0.9,
-  bottom: 0.9,
-);

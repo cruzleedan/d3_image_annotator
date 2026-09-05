@@ -172,6 +172,10 @@ class _CropOverlayState extends State<CropOverlay> {
   }
 }
 
+/// Weight shared by the frame border and the corner arms, so the two
+/// read as one control rather than a hairline with decorations.
+const double _borderWidth = 4;
+
 class _CropPainter extends CustomPainter {
   const _CropPainter({
     required this.frame,
@@ -194,11 +198,19 @@ class _CropPainter extends CustomPainter {
       ..fillType = PathFillType.evenOdd;
     canvas.drawPath(scrim, Paint()..color = Colors.black54);
 
-    final border = Paint()
-      ..color = Colors.white
-      ..strokeWidth = 1.5
-      ..style = PaintingStyle.stroke;
-    canvas.drawRect(frame, border);
+    // Black edges at the same weight as the corner arms, so the corners
+    // read as the grabbable part while the frame still has a continuous
+    // outline. This is what lets the frame open at the full image
+    // without an inset: the white corners stay visible against any
+    // photo because they sit on top of a black border rather than
+    // needing empty space around them.
+    canvas.drawRect(
+      frame,
+      Paint()
+        ..color = Colors.black87
+        ..strokeWidth = _borderWidth
+        ..style = PaintingStyle.stroke,
+    );
 
     // Rule-of-thirds guides, the convention in every photo cropper.
     final guide = Paint()
@@ -217,7 +229,7 @@ class _CropPainter extends CustomPainter {
   void _paintCorners(Canvas canvas) {
     final paint = Paint()
       ..color = Colors.white
-      ..strokeWidth = 4
+      ..strokeWidth = _borderWidth
       ..strokeCap = StrokeCap.square
       ..style = PaintingStyle.stroke;
 
@@ -228,9 +240,15 @@ class _CropPainter extends CustomPainter {
       math.min(frame.width, frame.height) / 3,
     );
 
+    // Inset by half the stroke so an arm at the image edge is drawn
+    // wholly inside the frame rather than half-clipped -- which is what
+    // would happen now the frame can sit flush against the boundary.
+    const inset = _borderWidth / 2;
+
     void corner(Offset at, double dx, double dy) {
-      canvas.drawLine(at, at.translate(dx * arm, 0), paint);
-      canvas.drawLine(at, at.translate(0, dy * arm), paint);
+      final origin = at.translate(dx * inset, dy * inset);
+      canvas.drawLine(origin, origin.translate(dx * arm, 0), paint);
+      canvas.drawLine(origin, origin.translate(0, dy * arm), paint);
     }
 
     corner(frame.topLeft, 1, 1);
