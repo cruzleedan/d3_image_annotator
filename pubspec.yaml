@@ -1,0 +1,29 @@
+name: d3_image_annotator
+description: >-
+  Annotate images with shapes, arrows, and freehand marks. Geometry is
+  stored in normalized image space, so a mark lands in the same place at
+  any zoom, screen size, or export resolution.
+version: 0.1.0
+homepage: https://github.com/cruzleedan/d3_image_annotator
+repository: https://github.com/cruzleedan/d3_image_annotator
+issue_tracker: https://github.com/cruzleedan/d3_image_annotator/issues
+
+topics:
+  - annotation
+  - image
+  - drawing
+  - markup
+
+environment:
+  sdk: ">=3.13.0 <4.0.0"
+  flutter: ">=3.13.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  meta: ^1.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
