@@ -41,6 +41,26 @@ Future<Color> _pixelAt(ui.Image image, double nx, double ny) async {
   );
 }
 
+/// The PNG chunk types present in [bytes], in file order.
+///
+/// PNG is a sequence of length-prefixed chunks after an 8-byte signature;
+/// each chunk is a 4-byte big-endian length, a 4-byte ASCII type, the
+/// data, and a 4-byte CRC.
+List<String> _pngChunkTypes(Uint8List bytes) {
+  final types = <String>[];
+  var i = 8;
+  while (i + 8 <= bytes.length) {
+    final length =
+        (bytes[i] << 24) | (bytes[i + 1] << 16) | (bytes[i + 2] << 8) |
+        bytes[i + 3];
+    final type = String.fromCharCodes(bytes.sublist(i + 4, i + 8));
+    types.add(type);
+    if (type == 'IEND') break;
+    i += 12 + length;
+  }
+  return types;
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -256,6 +276,29 @@ void main() {
       for (final at in const [0.1, 0.5, 0.9]) {
         expect(await _pixelAt(rendered, at, at), const Color(0xFFFFFFFF));
       }
+    });
+  });
+
+  group('metadata', () {
+    test('no metadata from the source survives into the render', () async {
+      // A rendered image is a derived artefact meant to be attached to a
+      // report or shared. It must not silently carry the original's GPS
+      // fix, capture time, or device serial along with it -- a site
+      // photo's coordinates leaving with a PDF is a disclosure, not a
+      // feature. Rendering through decoded pixels drops all of it; this
+      // test pins that as a guarantee rather than an accident of the
+      // encoder, so a future switch to a metadata-preserving codec has
+      // to confront the decision instead of quietly reversing it.
+      final source = await _whiteImage(64, 64);
+
+      final bytes = await renderAnnotatedImage(
+        imageBytes: source,
+        annotations: const [],
+      );
+
+      expect(_pngChunkTypes(bytes), isNot(contains('eXIf')));
+      expect(_pngChunkTypes(bytes), isNot(contains('tEXt')));
+      expect(_pngChunkTypes(bytes), isNot(contains('iTXt')));
     });
   });
 

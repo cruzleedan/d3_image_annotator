@@ -36,6 +36,20 @@ import 'render_options.dart';
 /// a provider can read the file itself, which is the honest cost of the
 /// guarantee.
 ///
+/// **Metadata is not preserved.** Rendering goes through decoded pixels,
+/// so no EXIF from the source reaches the output — not orientation, not
+/// capture time, and notably not the GPS fix. That is the intended
+/// default rather than a limitation worked around: a render exists to be
+/// attached to a report or shared, and a site photo's coordinates
+/// travelling with it would be a disclosure the user never asked for. A
+/// caller who needs provenance should carry it in the surrounding
+/// document, where it can be shown and removed deliberately.
+///
+/// Source EXIF *orientation* is likewise not read here. Bytes that
+/// require it must be decoded upright by the caller, or the rotation
+/// expressed as an [ImageTransform] — which is the reversible
+/// representation this package is built around anyway.
+///
 /// **Runs on the root isolate.** `PictureRecorder` refuses to run
 /// anywhere else ("UI actions are only available on root isolate",
 /// flutter/flutter#92575), so this cannot be moved to a background
