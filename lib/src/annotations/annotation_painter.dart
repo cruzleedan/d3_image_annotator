@@ -8,6 +8,7 @@ import '../coordinates/normalized_point.dart';
 import '../coordinates/normalized_rect.dart';
 import '../geometry/image_transform.dart';
 import 'annotation.dart';
+import 'annotation_handles.dart';
 
 /// Renders annotations onto a canvas.
 ///
@@ -102,6 +103,7 @@ void paintAnnotations(
         _mapRect(annotation.bounds, contentRect, transform),
         paint,
       );
+      _paintHandles(canvas, annotation, contentRect, transform);
     }
   }
 
@@ -212,6 +214,32 @@ void _paintFreehand(Canvas canvas, List<Offset> points, Paint paint) {
     path.lineTo(points[i].dx, points[i].dy);
   }
   canvas.drawPath(path, strokePaint);
+}
+
+/// Draws a grab handle at each of the annotation's grips.
+///
+/// Handles are a constant *screen* size, unlike stroke width which
+/// scales with the image. A handle is UI -- it has to stay finger-sized
+/// however far the picture is zoomed -- whereas a stroke is part of the
+/// picture. Both rules are deliberate; making either match the other
+/// would be a regression.
+void _paintHandles(
+  Canvas canvas,
+  Annotation annotation,
+  Rect contentRect,
+  ImageTransform transform,
+) {
+  final fill = Paint()..color = const Color(0xFFFFFFFF);
+  final edge = Paint()
+    ..color = const Color(0xDD000000)
+    ..strokeWidth = 1.5
+    ..style = PaintingStyle.stroke;
+
+  for (final point in gripsOf(annotation).values) {
+    final at = _mapOffset(point, contentRect, transform);
+    canvas.drawCircle(at, kHandleRadius, fill);
+    canvas.drawCircle(at, kHandleRadius, edge);
+  }
 }
 
 void _paintSelection(Canvas canvas, Rect bounds, Paint source) {

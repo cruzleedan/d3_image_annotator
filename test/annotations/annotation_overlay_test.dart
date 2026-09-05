@@ -352,4 +352,130 @@ void main() {
       expect(onExport.right, closeTo(3000 * 0.75, 1));
     });
   });
+
+  group('resizing a selected annotation', () {
+    RectangleAnnotation target() => RectangleAnnotation(
+      id: 'target',
+      style: const AnnotationStyle(),
+      rect: NormalizedRect(left: 0.3, top: 0.3, right: 0.7, bottom: 0.7),
+    );
+
+    testWidgets('dragging a corner handle resizes rather than moves', (
+      tester,
+    ) async {
+      // The priority rule: a handle sits on the shape's edge, so without
+      // it every corner drag would hit the shape and translate it.
+      final controller = AnnotationController()..add(target());
+      controller.select('target');
+      await pumpOverlay(
+        tester,
+        tool: AnnotationTool.select,
+        controller: controller,
+      );
+
+      // Grab the top-left handle and pull it outward.
+      await tester.dragFrom(at(0.3, 0.3), at(0.15, 0.15) - at(0.3, 0.3));
+      await tester.pumpAndSettle();
+
+      final rect = (controller.annotations.single as RectangleAnnotation).rect;
+      expect(rect.left, lessThan(0.3), reason: 'the corner should have moved');
+      expect(rect.right, closeTo(0.7, 0.02),
+          reason: 'the opposite corner must stay put -- a move would '
+              'have shifted it too');
+    });
+
+    testWidgets('dragging the body still moves the whole shape', (
+      tester,
+    ) async {
+      final controller = AnnotationController()..add(target());
+      controller.select('target');
+      await pumpOverlay(
+        tester,
+        tool: AnnotationTool.select,
+        controller: controller,
+      );
+
+      final before =
+          (controller.annotations.single as RectangleAnnotation).rect;
+
+      // On the top edge, midway between the corners: an outlined rect
+      // is hit near its border, not in its hollow middle, and this is
+      // far enough from either handle to fall through to the body.
+      await tester.dragFrom(at(0.5, 0.3), at(0.6, 0.4) - at(0.5, 0.3));
+      await tester.pumpAndSettle();
+
+      final after = (controller.annotations.single as RectangleAnnotation).rect;
+      expect(after.width, closeTo(before.width, 1e-6),
+          reason: 'moving must not resize');
+      expect(after.left, greaterThan(before.left));
+    });
+
+    testWidgets('handles only respond on the selected annotation', (
+      tester,
+    ) async {
+      // An unselected shape has no visible handles, so a drag at its
+      // corner should select it, not silently resize it.
+      final controller = AnnotationController()..add(target());
+      await pumpOverlay(
+        tester,
+        tool: AnnotationTool.select,
+        controller: controller,
+      );
+
+      final before =
+          (controller.annotations.single as RectangleAnnotation).rect;
+
+      await tester.dragFrom(at(0.3, 0.3), const Offset(0, 0));
+      await tester.pumpAndSettle();
+
+      expect(controller.selectedId, 'target');
+      expect(
+        (controller.annotations.single as RectangleAnnotation).rect,
+        before,
+      );
+    });
+
+    testWidgets('a resize is undoable back to the original geometry', (
+      tester,
+    ) async {
+      final controller = AnnotationController()..add(target());
+      controller.select('target');
+      await pumpOverlay(
+        tester,
+        tool: AnnotationTool.select,
+        controller: controller,
+      );
+      final before =
+          (controller.annotations.single as RectangleAnnotation).rect;
+
+      await tester.dragFrom(at(0.7, 0.7), at(0.9, 0.9) - at(0.7, 0.7));
+      await tester.pumpAndSettle();
+      expect(
+        (controller.annotations.single as RectangleAnnotation).rect,
+        isNot(before),
+      );
+
+      while (controller.canUndo) {
+        controller.undo();
+      }
+      expect(controller.annotations, isEmpty,
+          reason: 'undoing everything removes the annotation itself');
+    });
+
+    testWidgets('removing the selection deletes it', (tester) async {
+      final controller = AnnotationController()..add(target());
+      controller.select('target');
+      await pumpOverlay(
+        tester,
+        tool: AnnotationTool.select,
+        controller: controller,
+      );
+
+      controller.remove('target');
+      await tester.pumpAndSettle();
+
+      expect(controller.annotations, isEmpty);
+      expect(controller.selectedId, isNull);
+    });
+  });
 }

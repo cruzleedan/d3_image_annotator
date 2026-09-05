@@ -223,7 +223,7 @@ class _Toolbar extends StatelessWidget {
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 4),
                 child: Text(
-                  'One finger draws · two fingers pinch to zoom',
+                  'One finger draws · two fingers pinch · select to edit',
                   style: TextStyle(color: Colors.white54, fontSize: 12),
                 ),
               ),
@@ -254,11 +254,32 @@ class _Toolbar extends StatelessWidget {
                     disabledColor: Colors.white24,
                     icon: const Icon(Icons.redo),
                   ),
+                  // Deletes the selection when there is one, otherwise
+                  // clears everything -- so the same control serves both
+                  // without a second button competing for space.
                   IconButton(
-                    onPressed: controller.isEmpty ? null : controller.clear,
-                    color: Colors.white70,
+                    tooltip: controller.selectedId != null
+                        ? 'Delete selected'
+                        : 'Clear all',
+                    onPressed: controller.isEmpty
+                        ? null
+                        : () {
+                            final id = controller.selectedId;
+                            if (id != null) {
+                              controller.remove(id);
+                            } else {
+                              controller.clear();
+                            }
+                          },
+                    color: controller.selectedId != null
+                        ? Colors.redAccent
+                        : Colors.white70,
                     disabledColor: Colors.white24,
-                    icon: const Icon(Icons.delete_outline),
+                    icon: Icon(
+                      controller.selectedId != null
+                          ? Icons.delete
+                          : Icons.delete_outline,
+                    ),
                   ),
                 ],
               ),
