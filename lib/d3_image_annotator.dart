@@ -17,6 +17,8 @@ library;
 
 // Model and controller
 export 'src/annotations/annotation.dart';
+export 'src/annotations/annotation_binding.dart';
+export 'src/annotations/annotation_codec.dart';
 export 'src/annotations/annotation_controller.dart';
 export 'src/annotations/annotation_overlay_widget.dart';
 export 'src/annotations/annotation_painter.dart';
