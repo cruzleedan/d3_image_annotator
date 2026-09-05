@@ -235,6 +235,51 @@ class _Toolbar extends StatelessWidget {
                   ),
                 ],
               ),
+              // Transforms: non-destructive, so annotations follow the
+              // image and a crop can be undone.
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  IconButton(
+                    tooltip: 'Rotate',
+                    onPressed: controller.rotateClockwise,
+                    color: Colors.white70,
+                    icon: const Icon(Icons.rotate_90_degrees_cw),
+                  ),
+                  IconButton(
+                    tooltip: 'Mirror',
+                    onPressed: controller.toggleMirror,
+                    color: controller.transform.mirrored
+                        ? Colors.amber
+                        : Colors.white70,
+                    icon: const Icon(Icons.flip),
+                  ),
+                  IconButton(
+                    tooltip: 'Crop to centre',
+                    onPressed: () => controller.crop(
+                      NormalizedRect(
+                        left: 0.2,
+                        top: 0.2,
+                        right: 0.8,
+                        bottom: 0.8,
+                      ),
+                    ),
+                    color: controller.transform.cropRect != null
+                        ? Colors.amber
+                        : Colors.white70,
+                    icon: const Icon(Icons.crop),
+                  ),
+                  IconButton(
+                    tooltip: 'Reset transform',
+                    onPressed: controller.transform.isIdentity
+                        ? null
+                        : controller.resetTransform,
+                    color: Colors.white70,
+                    disabledColor: Colors.white24,
+                    icon: const Icon(Icons.crop_free),
+                  ),
+                ],
+              ),
             ],
           ),
         );

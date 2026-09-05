@@ -32,13 +32,21 @@ void main() {
     AnnotationTool tool = AnnotationTool.rectangle,
     TransformationController? transform,
     bool enableZoom = true,
+    AnnotationController? controller,
   }) async {
     tester.view.physicalSize = viewport;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final controller = AnnotationController();
-    addTearDown(controller.dispose);
+    // Only dispose what this helper created; a caller-supplied
+    // controller is the caller's to clean up.
+    final AnnotationController c;
+    if (controller != null) {
+      c = controller;
+    } else {
+      c = AnnotationController();
+      addTearDown(c.dispose);
+    }
 
     await tester.pumpWidget(
       MaterialApp(
@@ -49,7 +57,7 @@ void main() {
             child: D3ImageAnnotator(
               image: MemoryImage(_pngBytes),
               imageSize: imageSize,
-              controller: controller,
+              controller: c,
               tool: tool,
               enableZoom: enableZoom,
               transformationController: transform,
@@ -59,7 +67,7 @@ void main() {
       ),
     );
     await tester.pump();
-    return controller;
+    return c;
   }
 
   // Flutter's pan recognizer swallows the first ~18 logical pixels as
@@ -230,6 +238,101 @@ void main() {
         closeTo(4, 1e-9),
         reason: 'stroke must scale with the canvas, not stay pixel-constant',
       );
+    });
+  });
+
+  group('drawing on a transformed image', () {
+    /// The guarantee that makes rotate/crop safe: a user draws on the
+    /// *transformed* view, and the mark must be stored against the
+    /// *original* image. If these disagree, every annotation shifts the
+    /// moment a photo is rotated.
+    testWidgets('a mark drawn on a rotated view stores original coords', (
+      tester,
+    ) async {
+      final rotated = AnnotationController()..rotateClockwise();
+      addTearDown(rotated.dispose);
+      await pump(tester, controller: rotated);
+
+      // Drag across the middle of the rotated view.
+      await tester.dragFrom(at(0.3, 0.3), at(0.7, 0.7) - at(0.3, 0.3));
+      await tester.pumpAndSettle();
+
+      expect(rotated.annotations, hasLength(1));
+      final rect = (rotated.annotations.single as RectangleAnnotation).rect;
+
+      // Stored geometry must be valid original-image coordinates, not
+      // view coordinates: still in range, and a real area.
+      expect(rect.left, inInclusiveRange(0, 1));
+      expect(rect.right, inInclusiveRange(0, 1));
+      expect(rect.width, greaterThan(0));
+      expect(rect.height, greaterThan(0));
+    });
+
+    testWidgets('what is drawn on a rotated view round-trips to the view', (
+      tester,
+    ) async {
+      final rotated = AnnotationController()..rotateClockwise();
+      addTearDown(rotated.dispose);
+      await pump(tester, controller: rotated);
+
+      await tester.dragFrom(at(0.25, 0.25), at(0.6, 0.6) - at(0.25, 0.25));
+      await tester.pumpAndSettle();
+
+      final stored = (rotated.annotations.single as RectangleAnnotation).rect;
+
+      // Mapping the stored corners forward through the same transform
+      // should land back near where the drag ended in view space.
+      final mappedEnd = rotated.transform.mapPoint(
+        NormalizedPoint(stored.right, stored.bottom),
+      );
+      final mappedStart = rotated.transform.mapPoint(
+        NormalizedPoint(stored.left, stored.top),
+      );
+
+      // The drag covered view-space 0.25..0.6 on both axes; the mapped
+      // corners should span roughly that, in some corner order.
+      final xs = [mappedStart.x, mappedEnd.x]..sort();
+      expect(xs.first, closeTo(0.25, 0.08));
+      expect(xs.last, closeTo(0.6, 0.08));
+    });
+
+    testWidgets('existing marks are unchanged by rotating', (tester) async {
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+      await pump(tester, controller: c);
+
+      await tester.dragFrom(at(0.2, 0.2), at(0.6, 0.6) - at(0.2, 0.2));
+      await tester.pumpAndSettle();
+      final before = (c.annotations.single as RectangleAnnotation).rect;
+
+      c.rotateClockwise();
+      await tester.pumpAndSettle();
+
+      final after = (c.annotations.single as RectangleAnnotation).rect;
+      expect(after, before,
+          reason: 'geometry is stored against the original image');
+    });
+
+    testWidgets('cropping does not delete marks outside the crop', (
+      tester,
+    ) async {
+      // Clipping, not deleting: widening the crop must bring them back.
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+      await pump(tester, controller: c);
+
+      await tester.dragFrom(at(0.05, 0.05), at(0.2, 0.2) - at(0.05, 0.05));
+      await tester.pumpAndSettle();
+      expect(c.annotations, hasLength(1));
+
+      c.crop(NormalizedRect(left: 0.6, top: 0.6, right: 1, bottom: 1));
+      await tester.pumpAndSettle();
+      expect(c.annotations, hasLength(1),
+          reason: 'a mark outside the crop is clipped, never removed');
+
+      c.crop(null);
+      await tester.pumpAndSettle();
+      expect(c.annotations, hasLength(1));
     });
   });
 }

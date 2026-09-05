@@ -5,6 +5,7 @@ import '../annotations/annotation_overlay_widget.dart';
 import '../annotations/annotation_style.dart';
 import '../annotations/annotation_tool.dart';
 import '../geometry/image_fit.dart';
+import '../geometry/image_transform.dart';
 
 /// A zoomable, annotatable image.
 ///
@@ -145,16 +146,19 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
     return ColoredBox(
       color: widget.backgroundColor,
       child: AnimatedBuilder(
-        animation: _transform,
+        // Both: zoom lives on _transform, rotate/mirror/crop on the
+        // controller. A change to either has to repaint.
+        animation: Listenable.merge([_transform, widget.controller]),
         builder: (context, _) {
           return Stack(
             fit: StackFit.expand,
             children: [
               Transform(
                 transform: _transform.value,
-                child: Image(
+                child: _TransformedImage(
                   image: widget.image,
                   fit: _boxFitFor(widget.fit),
+                  imageTransform: widget.controller.transform,
                 ),
               ),
               AnnotationOverlay(
@@ -163,6 +167,7 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
                 tool: widget.tool,
                 fit: widget.fit,
                 transform: _transform.value,
+                imageTransform: widget.controller.transform,
                 onScaleStart: _onScaleStart,
                 onScaleUpdate: _onScaleUpdate,
               ),
@@ -177,4 +182,57 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
     ImageFit.contain => BoxFit.contain,
     ImageFit.cover => BoxFit.cover,
   };
+}
+
+/// Draws the image with the rotate / mirror / crop applied.
+///
+/// Crop is done with alignment and a fitted box rather than by cutting
+/// pixels: nothing is destroyed, so clearing the crop restores the
+/// original view immediately.
+class _TransformedImage extends StatelessWidget {
+  const _TransformedImage({
+    required this.image,
+    required this.fit,
+    required this.imageTransform,
+  });
+
+  final ImageProvider image;
+  final BoxFit fit;
+  final ImageTransform imageTransform;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget child = Image(image: image, fit: fit);
+
+    final crop = imageTransform.cropRect;
+    if (crop != null) {
+      // FractionallySizedBox with a negative-space alignment shows only
+      // the cropped region, scaled to fill. The full image is still
+      // there; this is a window onto it.
+      child = ClipRect(
+        child: FractionallySizedBox(
+          widthFactor: crop.width == 0 ? 1 : 1 / crop.width,
+          heightFactor: crop.height == 0 ? 1 : 1 / crop.height,
+          alignment: Alignment(
+            crop.width >= 1 ? 0 : (crop.left / (1 - crop.width)) * 2 - 1,
+            crop.height >= 1 ? 0 : (crop.top / (1 - crop.height)) * 2 - 1,
+          ),
+          child: child,
+        ),
+      );
+    }
+
+    if (imageTransform.mirrored) {
+      child = Transform.flip(flipX: true, child: child);
+    }
+
+    if (imageTransform.quarterTurns != 0) {
+      child = RotatedBox(
+        quarterTurns: imageTransform.quarterTurns,
+        child: child,
+      );
+    }
+
+    return child;
+  }
 }
