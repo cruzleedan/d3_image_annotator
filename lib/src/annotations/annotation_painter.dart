@@ -42,9 +42,26 @@ void paintAnnotations(
     canvas.clipRect(contentRect);
   }
 
-  // Stroke widths are a fraction of the shorter side so weight scales
-  // with the image rather than the device.
-  final shorterSide = math.min(contentRect.width, contentRect.height);
+  // Stroke width is a fraction of the *whole image* as currently
+  // displayed, not of the visible content rect.
+  //
+  // Those differ under crop, and using the rect is wrong: cropping
+  // shrinks the result, which `contain` then scales back up to fill the
+  // viewport. The rect's shorter side barely changes, so the stroke
+  // stays the same pixel width while the content beneath it is
+  // magnified -- the mark comes out visibly thinner relative to the
+  // feature it marks. Dividing by the crop's extent undoes that
+  // magnification, so a mark keeps its weight relative to the picture,
+  // which is the rule this package documents: annotations scale *with*
+  // the image.
+  final crop = transform.effectiveCrop;
+  final fullWidth = crop.width == 0
+      ? contentRect.width
+      : contentRect.width / crop.width;
+  final fullHeight = crop.height == 0
+      ? contentRect.height
+      : contentRect.height / crop.height;
+  final shorterSide = math.min(fullWidth, fullHeight);
 
   for (final annotation in annotations) {
     final paint = Paint()
