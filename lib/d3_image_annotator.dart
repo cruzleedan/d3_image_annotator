@@ -34,6 +34,7 @@ export 'src/coordinates/normalized_rect.dart';
 // Geometry shared by the viewer and the overlay
 export 'src/geometry/content_rect.dart';
 export 'src/geometry/image_fit.dart';
+export 'src/geometry/image_transform.dart';
 
 // Viewer
 export 'src/viewer/image_annotator.dart';

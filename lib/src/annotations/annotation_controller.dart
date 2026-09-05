@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../coordinates/normalized_rect.dart';
+import '../geometry/image_transform.dart';
 import 'annotation.dart';
 import 'annotation_style.dart';
 
@@ -19,17 +21,24 @@ class AnnotationController extends ChangeNotifier {
     List<Annotation>? initial,
     this.maxUndoSteps = 50,
     AnnotationStyle initialStyle = const AnnotationStyle(),
+    ImageTransform initialTransform = ImageTransform.identity,
   }) : assert(maxUndoSteps > 0, 'maxUndoSteps must be positive'),
        _annotations = List.of(initial ?? const []),
-       _style = initialStyle;
+       _style = initialStyle,
+       _transform = initialTransform;
 
   /// Cap on undo depth. Bounded so a long editing session cannot grow
   /// memory without limit; the oldest step is dropped past this.
   final int maxUndoSteps;
 
   List<Annotation> _annotations;
-  final List<List<Annotation>> _undoStack = [];
-  final List<List<Annotation>> _redoStack = [];
+  ImageTransform _transform;
+
+  // Snapshots capture annotations *and* transform together. Keeping
+  // separate stacks would let undo restore a rotation without the marks
+  // that were drawn under it, or vice versa.
+  final List<_Snapshot> _undoStack = [];
+  final List<_Snapshot> _redoStack = [];
   AnnotationStyle _style;
   String? _selectedId;
 
@@ -57,6 +66,51 @@ class AnnotationController extends ChangeNotifier {
       if (a.id == id) return a;
     }
     return null;
+  }
+
+  /// Non-destructive rotate / mirror / crop applied to the image.
+  ///
+  /// Annotation geometry is never rewritten to match: marks stay in the
+  /// original image's space and this composes at paint time, so a crop
+  /// stays reversible and repeated rotations accumulate no float error.
+  ImageTransform get transform => _transform;
+
+  /// Rotates 90 degrees clockwise, as one undoable step.
+  void rotateClockwise() {
+    _pushUndo();
+    _transform = _transform.rotatedClockwise();
+    notifyListeners();
+  }
+
+  void rotateCounterClockwise() {
+    _pushUndo();
+    _transform = _transform.rotatedCounterClockwise();
+    notifyListeners();
+  }
+
+  void toggleMirror() {
+    _pushUndo();
+    _transform = _transform.withMirrored(!_transform.mirrored);
+    notifyListeners();
+  }
+
+  /// Sets the visible region, or clears it with null.
+  ///
+  /// Annotations outside the crop are neither hidden nor deleted --
+  /// they clip at the boundary, and widening the crop brings them back
+  /// intact, because their stored geometry was never touched.
+  void crop(NormalizedRect? rect) {
+    if (_transform.cropRect == rect) return;
+    _pushUndo();
+    _transform = _transform.withCrop(rect);
+    notifyListeners();
+  }
+
+  void resetTransform() {
+    if (_transform.isIdentity) return;
+    _pushUndo();
+    _transform = ImageTransform.identity;
+    notifyListeners();
   }
 
   bool get canUndo => _undoStack.isNotEmpty;
@@ -104,22 +158,28 @@ class AnnotationController extends ChangeNotifier {
 
   void undo() {
     if (_undoStack.isEmpty) return;
-    _redoStack.add(List.of(_annotations));
-    _annotations = _undoStack.removeLast();
-    _dropSelectionIfGone();
+    _redoStack.add(_snapshot());
+    _restore(_undoStack.removeLast());
     notifyListeners();
   }
 
   void redo() {
     if (_redoStack.isEmpty) return;
-    _undoStack.add(List.of(_annotations));
-    _annotations = _redoStack.removeLast();
-    _dropSelectionIfGone();
+    _undoStack.add(_snapshot());
+    _restore(_redoStack.removeLast());
     notifyListeners();
   }
 
+  _Snapshot _snapshot() => _Snapshot(List.of(_annotations), _transform);
+
+  void _restore(_Snapshot snapshot) {
+    _annotations = snapshot.annotations;
+    _transform = snapshot.transform;
+    _dropSelectionIfGone();
+  }
+
   void _pushUndo() {
-    _undoStack.add(List.of(_annotations));
+    _undoStack.add(_snapshot());
     if (_undoStack.length > maxUndoSteps) _undoStack.removeAt(0);
     // Any new edit invalidates the redo branch -- standard editor
     // behaviour, and keeping it would let redo resurrect annotations
@@ -132,4 +192,13 @@ class AnnotationController extends ChangeNotifier {
     if (id == null) return;
     if (!_annotations.any((a) => a.id == id)) _selectedId = null;
   }
+}
+
+/// One point in the edit history: the annotations *and* the transform
+/// as they were together.
+class _Snapshot {
+  _Snapshot(this.annotations, this.transform);
+
+  final List<Annotation> annotations;
+  final ImageTransform transform;
 }
