@@ -279,4 +279,53 @@ void main() {
       }
     });
   });
+
+  group('close button', () {
+    testWidgets('reports a tap and meets the touch minimum', (tester) async {
+      // An editing surface needs a visible way out. The system back
+      // gesture alone is invisible, and on a screen that has just taught
+      // the user to drag things around, a swipe is an ambiguous way to
+      // say "I am finished".
+      var closed = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            appBar: AppBar(
+              leading: D3CloseButton(onPressed: () => closed = true),
+            ),
+            body: const SizedBox.expand(),
+          ),
+        ),
+      );
+
+      final size = tester.getSize(
+        find
+            .ancestor(
+              of: find.byIcon(Icons.close),
+              matching: find.byType(ConstrainedBox),
+            )
+            .first,
+      );
+      expect(size.width, greaterThanOrEqualTo(kMinimumTouchTarget));
+      expect(size.height, greaterThanOrEqualTo(kMinimumTouchTarget));
+
+      await tester.tap(find.byIcon(Icons.close));
+      expect(closed, isTrue);
+    });
+
+    testWidgets('announces itself to a screen reader', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            appBar: AppBar(leading: D3CloseButton(onPressed: () {})),
+            body: const SizedBox.expand(),
+          ),
+        ),
+      );
+
+      final node = tester.getSemantics(find.byIcon(Icons.close));
+      expect(node.label, 'Close');
+      expect(node.flagsCollection.isButton, isTrue);
+    });
+  });
 }

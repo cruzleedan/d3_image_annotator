@@ -214,6 +214,35 @@ class D3ToolGroupBar<T> extends StatelessWidget {
   }
 }
 
+/// A close affordance for the annotator, sized like every other control
+/// here.
+///
+/// An editing surface needs a visible way out. Relying on the system
+/// back gesture alone is a poor default: it is invisible, it is not
+/// available on every platform this package's Dart API is meant to
+/// reach, and on a screen that has just taught the user to drag things
+/// around, a swipe is an ambiguous way to say "I am finished".
+class D3CloseButton extends StatelessWidget {
+  const D3CloseButton({
+    super.key,
+    required this.onPressed,
+    this.tooltip = 'Close',
+  });
+
+  final VoidCallback? onPressed;
+  final String tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    return _HistoryAction(
+      icon: Icons.close,
+      tooltip: tooltip,
+      color: Colors.white,
+      onPressed: onPressed,
+    );
+  }
+}
+
 /// Undo / redo / clear, sized for a top bar.
 ///
 /// These live apart from the tool groups on purpose. Undo is a safety

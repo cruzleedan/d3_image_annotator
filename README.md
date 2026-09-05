@@ -103,6 +103,35 @@ outlive the file they describe, and an empty canvas would be a lie.
 The check is **advisory** — the package never refuses to decode, because
 only your app knows whether a mismatch is corruption or intent.
 
+## Chrome is yours
+
+The package deliberately owns no `Scaffold`, `AppBar`, or screen title —
+an annotator embedded in your app should look like your app, not like
+this package. What it does provide is the controls, each with a
+guaranteed 48dp touch target (Material 3 and WCAG 2.5.8 AA):
+
+```dart
+Scaffold(
+  appBar: AppBar(
+    leading: D3CloseButton(onPressed: () => Navigator.maybePop(context)),
+    actions: [D3HistoryBar(controller: controller)],
+  ),
+  body: D3ImageAnnotator(/* … */),
+  bottomNavigationBar: D3ToolBar(
+    children: [
+      D3ToolButton(icon: Icons.crop_square, label: 'Box', onPressed: …),
+      // …
+    ],
+  ),
+)
+```
+
+`D3ToolButton` carries a caption, because crop, straighten and mirror
+icons are not self-evident. `D3ToolGroupBar` filters a long tool row
+into groups. Undo, redo and clear belong in `D3HistoryBar` rather than a
+tool group: undo is a safety control, and hunting for it behind a group
+switch leaves the mistake on screen.
+
 ## Composing your own UI
 
 `D3ImageAnnotator` is a convenience. The overlay works standalone over

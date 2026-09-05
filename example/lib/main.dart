@@ -143,18 +143,35 @@ class _AnnotatorDemoState extends State<_AnnotatorDemo> {
     final bytes = _bytes;
     return Scaffold(
       backgroundColor: Colors.black,
+      // No title. An editing surface is about the image, and a caption
+      // saying which package drew it is chrome the consuming app would
+      // never want. The package itself owns no Scaffold or AppBar at
+      // all -- this bar is the example's own.
       appBar: AppBar(
-        title: const Text('d3_image_annotator'),
+        backgroundColor: Colors.black,
+        leading: D3CloseButton(onPressed: () => Navigator.maybePop(context)),
         actions: [
           // Undo/redo/clear live here rather than in a tool group.
           // Undo is a safety control: having to switch groups to reach
           // it leaves a mistake on screen while the user hunts for the
           // fix.
           D3HistoryBar(controller: _controller),
-          IconButton(
-            tooltip: 'Reset zoom',
-            onPressed: () => _transform.value = Matrix4.identity(),
-            icon: const Icon(Icons.zoom_out_map),
+          // Disabled at 1x, so it reads as "nothing to reset" rather
+          // than as a button that does nothing.
+          ValueListenableBuilder<Matrix4>(
+            valueListenable: _transform,
+            builder: (context, matrix, _) {
+              final zoomed = matrix.getMaxScaleOnAxis() > 1.001;
+              return IconButton(
+                tooltip: 'Reset zoom',
+                onPressed: zoomed
+                    ? () => _transform.value = Matrix4.identity()
+                    : null,
+                disabledColor: Colors.white24,
+                color: Colors.white70,
+                icon: const Icon(Icons.zoom_out_map),
+              );
+            },
           ),
         ],
       ),
