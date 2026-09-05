@@ -37,4 +37,5 @@ export 'src/geometry/image_fit.dart';
 export 'src/geometry/image_transform.dart';
 
 // Viewer
+export 'src/viewer/crop_overlay.dart';
 export 'src/viewer/image_annotator.dart';

@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../annotations/annotation_controller.dart';
 import '../annotations/annotation_overlay_widget.dart';
+import '../annotations/annotation_painter.dart';
+import '../coordinates/normalized_rect.dart';
+import '../geometry/content_rect.dart';
 import '../annotations/annotation_style.dart';
 import '../annotations/annotation_tool.dart';
 import '../geometry/image_fit.dart';
 import '../geometry/image_transform.dart';
+import 'crop_overlay.dart';
 
 /// A zoomable, annotatable image.
 ///
@@ -45,6 +49,8 @@ class D3ImageAnnotator extends StatefulWidget {
     this.enableZoom = true,
     this.transformationController,
     this.backgroundColor = Colors.black,
+    this.cropping = false,
+    this.onCropChanged,
   });
 
   final ImageProvider image;
@@ -76,6 +82,21 @@ class D3ImageAnnotator extends StatefulWidget {
   final TransformationController? transformationController;
 
   final Color backgroundColor;
+
+  /// Shows the interactive crop frame, suspending drawing and zoom.
+  ///
+  /// Crop is a mode rather than a tool: while it is on, every drag
+  /// adjusts the frame. That keeps it clear of the gesture contention
+  /// that drawing and zoom already have to share, and matches how the
+  /// Pixel and iOS editors behave.
+  ///
+  /// Nothing is applied while cropping -- the host decides when to
+  /// commit the frame via `controller.crop`, so cancelling is free.
+  final bool cropping;
+
+  /// Reports the frame as it is dragged, so a host can enable a confirm
+  /// button or show live dimensions.
+  final ValueChanged<NormalizedRect>? onCropChanged;
 
   @override
   State<D3ImageAnnotator> createState() => _D3ImageAnnotatorState();
@@ -161,16 +182,65 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
                   imageTransform: widget.controller.transform,
                 ),
               ),
-              AnnotationOverlay(
-                controller: widget.controller,
-                imageSize: widget.imageSize,
-                tool: widget.tool,
-                fit: widget.fit,
-                transform: _transform.value,
-                imageTransform: widget.controller.transform,
-                onScaleStart: _onScaleStart,
-                onScaleUpdate: _onScaleUpdate,
-              ),
+              if (!widget.cropping)
+                AnnotationOverlay(
+                  controller: widget.controller,
+                  imageSize: widget.imageSize,
+                  tool: widget.tool,
+                  fit: widget.fit,
+                  transform: _transform.value,
+                  imageTransform: widget.controller.transform,
+                  onScaleStart: _onScaleStart,
+                  onScaleUpdate: _onScaleUpdate,
+                )
+              else
+                // Annotations stay visible while cropping so the user can
+                // see what the frame will keep -- but they are painted
+                // without gestures, since the crop frame owns every
+                // pointer in this mode.
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final contentRect = computeImageContentRect(
+                      widgetSize: Size(
+                        constraints.maxWidth,
+                        constraints.maxHeight,
+                      ),
+                      contentSize: widget.controller.transform.resultSize(
+                        widget.imageSize,
+                      ),
+                      fit: widget.fit,
+                    );
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        IgnorePointer(
+                          child: CustomPaint(
+                            painter: AnnotationPainter(
+                              annotations: widget.controller.annotations,
+                              contentRect: contentRect,
+                              transform: widget.controller.transform,
+                            ),
+                          ),
+                        ),
+                        CropOverlay(
+                          contentRect: contentRect,
+                          // An inset frame when nothing is cropped yet.
+                          // Opening at the full frame is technically
+                          // correct but reads as broken: there is no
+                          // dimmed surround to see, and the corner
+                          // handles sit right on the image edge where
+                          // they are awkward to grab. Pixel and iOS both
+                          // open inset for the same reason.
+                          initialCrop:
+                              widget.controller.transform.cropRect ??
+                              _defaultCropFrame,
+                          onChanged: (rect) =>
+                              widget.onCropChanged?.call(rect),
+                        ),
+                      ],
+                    );
+                  },
+                ),
             ],
           );
         },
@@ -236,3 +306,14 @@ class _TransformedImage extends StatelessWidget {
     return child;
   }
 }
+
+/// Where the crop frame starts when the image has never been cropped.
+///
+/// Inset rather than full-frame so the handles are visible and clear of
+/// the image edge from the moment crop mode opens.
+final NormalizedRect _defaultCropFrame = NormalizedRect(
+  left: 0.1,
+  top: 0.1,
+  right: 0.9,
+  bottom: 0.9,
+);
