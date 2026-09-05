@@ -8,6 +8,7 @@ import '../geometry/image_transform.dart';
 import '../geometry/content_rect.dart';
 import 'annotation.dart';
 import 'annotation_controller.dart';
+import 'annotation_handles.dart';
 import 'annotation_painter.dart';
 import 'annotation_tool.dart';
 import 'hit_testing.dart';
@@ -102,6 +103,9 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
   Annotation? _movingOriginal;
   NormalizedPoint? _moveAnchor;
 
+  /// Set when a drag grabbed a resize handle rather than the shape body.
+  AnnotationGrip? _grip;
+
   int _idCounter = 0;
 
 
@@ -155,6 +159,25 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     final point = _toOriginalImagePoint(localRaw, contentRect);
 
     if (widget.tool == AnnotationTool.select) {
+      // Handles first. A handle sits on the shape's edge, so without
+      // this priority every corner drag would hit the shape and move it
+      // instead of resizing.
+      final selected = widget.controller.selected;
+      if (selected != null) {
+        final grip = gripAt(
+          selected,
+          _toImageSpace(localRaw),
+          contentRect,
+          widget.imageTransform,
+        );
+        if (grip != null) {
+          _grip = grip;
+          _movingId = selected.id;
+          _movingOriginal = selected;
+          return;
+        }
+      }
+
       final hit = hitTestAnnotations(
         widget.controller.annotations,
         point,
@@ -229,8 +252,21 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
   void _dragSelection(NormalizedPoint point) {
     final id = _movingId;
     final original = _movingOriginal;
+    if (id == null || original == null) return;
+
+    final grip = _grip;
+    if (grip != null) {
+      // Resizing works from the *current* geometry, not the drag
+      // origin: each update sets the grabbed corner to where the finger
+      // is, so the shape tracks it exactly rather than accumulating.
+      final current = widget.controller.selected ?? original;
+      final resized = resizeAnnotation(current, grip, point);
+      if (resized != null) widget.controller.update(id, resized);
+      return;
+    }
+
     final anchor = _moveAnchor;
-    if (id == null || original == null || anchor == null) return;
+    if (anchor == null) return;
 
     final dx = point.x - anchor.x;
     final dy = point.y - anchor.y;
@@ -252,6 +288,7 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
       _movingId = null;
       _movingOriginal = null;
       _moveAnchor = null;
+      _grip = null;
       return;
     }
 

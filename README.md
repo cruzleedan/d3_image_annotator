@@ -103,6 +103,37 @@ outlive the file they describe, and an empty canvas would be a lie.
 The check is **advisory** — the package never refuses to decode, because
 only your app knows whether a mismatch is corruption or intent.
 
+## The whole editor, in one widget
+
+`D3AnnotatorScreen` is the usual entry point. It brings its own tools,
+history controls and close affordance, so you supply an image and decide
+what to do with the result:
+
+```dart
+D3AnnotatorScreen(
+  image: FileImage(File(path)),
+  imageSize: const Size(3000, 4000),
+  controller: controller,
+  onClose: () => Navigator.pop(context),
+  onDone: () => save(controller.annotations),
+)
+```
+
+Every control carries a caption — crop, straighten and mirror icons are
+not self-evident — and meets a 48dp touch target (Material 3 and
+WCAG 2.5.8 AA). Tools are grouped so the row stays short; undo, redo and
+clear deliberately sit *outside* those groups, because undo is a safety
+control and hunting for it behind a group switch leaves the mistake on
+screen.
+
+**It owns no `Scaffold`, `AppBar` or screen title.** An annotator
+embedded in your app should look like your app, so the bars are plain
+rows you can place in a page, a dialog or a sheet.
+
+Building something different? `D3ImageAnnotator` is the bare viewer, and
+`D3ToolButton`, `D3ToolBar`, `D3ToolGroupBar`, `D3HistoryBar` and
+`D3CloseButton` are exported individually.
+
 ## Composing your own UI
 
 `D3ImageAnnotator` is a convenience. The overlay works standalone over

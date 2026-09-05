@@ -20,6 +20,7 @@ export 'src/annotations/annotation.dart';
 export 'src/annotations/annotation_binding.dart';
 export 'src/annotations/annotation_codec.dart';
 export 'src/annotations/annotation_controller.dart';
+export 'src/annotations/annotation_handles.dart';
 export 'src/annotations/annotation_overlay_widget.dart';
 export 'src/annotations/annotation_painter.dart';
 export 'src/annotations/annotation_style.dart';
@@ -35,6 +36,10 @@ export 'src/coordinates/normalized_rect.dart';
 export 'src/geometry/content_rect.dart';
 export 'src/geometry/image_fit.dart';
 export 'src/geometry/image_transform.dart';
+
+// Reusable toolbar controls with guaranteed touch targets
+export 'src/ui/annotator_screen.dart';
+export 'src/ui/tool_button.dart';
 
 // Viewer
 export 'src/viewer/crop_overlay.dart';

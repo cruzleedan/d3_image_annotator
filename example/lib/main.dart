@@ -114,14 +114,7 @@ class _AnnotatorDemoState extends State<_AnnotatorDemo> {
   static const _imageSize = Size(1200, 1600);
 
   final _controller = AnnotationController();
-  final _transform = TransformationController();
-  AnnotationTool _tool = AnnotationTool.rectangle;
   Uint8List? _bytes;
-
-  /// Crop is a mode: while it is on, drags adjust the frame instead of
-  /// drawing, and nothing is applied until it is confirmed.
-  bool _cropping = false;
-  NormalizedRect? _pendingCrop;
 
   @override
   void initState() {
@@ -134,224 +127,44 @@ class _AnnotatorDemoState extends State<_AnnotatorDemo> {
   @override
   void dispose() {
     _controller.dispose();
-    _transform.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final bytes = _bytes;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        title: const Text('d3_image_annotator'),
-        actions: [
-          IconButton(
-            tooltip: 'Reset zoom',
-            onPressed: () => _transform.value = Matrix4.identity(),
-            icon: const Icon(Icons.zoom_out_map),
-          ),
-        ],
+    if (bytes == null) {
+      return const ColoredBox(
+        color: Colors.black,
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    // The whole editor, chrome included. The package owns the toolbars,
+    // history controls and close affordance, so a consuming app supplies
+    // the image and decides what to do with the result -- rather than
+    // reassembling a toolbar and re-deriving which controls belong where.
+    return D3AnnotatorScreen(
+      image: MemoryImage(bytes),
+      imageSize: _imageSize,
+      controller: _controller,
+      onClose: () => ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Closed without saving')),
       ),
-      body: bytes == null
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                Expanded(
-                  child: D3ImageAnnotator(
-                    image: MemoryImage(bytes),
-                    imageSize: _imageSize,
-                    controller: _controller,
-                    tool: _tool,
-                    transformationController: _transform,
-                    cropping: _cropping,
-                    onCropChanged: (rect) => _pendingCrop = rect,
-                  ),
-                ),
-                if (_cropping)
-                  _CropBar(
-                    onCancel: () => setState(() {
-                      _cropping = false;
-                      _pendingCrop = null;
-                    }),
-                    onConfirm: () => setState(() {
-                      final rect = _pendingCrop;
-                      if (rect != null) _controller.crop(rect);
-                      _cropping = false;
-                      _pendingCrop = null;
-                    }),
-                  )
-                else
-                  _Toolbar(
-                    tool: _tool,
-                    controller: _controller,
-                    onToolChanged: (t) => setState(() => _tool = t),
-                    onStartCrop: () => setState(() {
-                      _cropping = true;
-                      _pendingCrop = _controller.transform.effectiveCrop;
-                    }),
-                  ),
-              ],
+      onDone: () {
+        // Annotations are data: persist them and re-open them later.
+        final document = AnnotationDocument(
+          annotations: _controller.annotations,
+          sourceImageSize: _imageSize,
+        );
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Saved ${document.annotations.length} annotation(s) as JSON',
             ),
-    );
-  }
-}
-
-class _Toolbar extends StatelessWidget {
-  const _Toolbar({
-    required this.tool,
-    required this.controller,
-    required this.onToolChanged,
-    required this.onStartCrop,
-  });
-
-  final AnnotationTool tool;
-  final AnnotationController controller;
-  final ValueChanged<AnnotationTool> onToolChanged;
-  final VoidCallback onStartCrop;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: controller,
-      builder: (context, _) {
-        return SafeArea(
-          top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 4),
-                child: Text(
-                  'One finger draws · two fingers pinch to zoom',
-                  style: TextStyle(color: Colors.white54, fontSize: 12),
-                ),
-              ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  for (final t in AnnotationTool.values)
-                    IconButton(
-                      onPressed: () => onToolChanged(t),
-                      color: t == tool ? Colors.amber : Colors.white70,
-                      icon: Icon(switch (t) {
-                        AnnotationTool.select => Icons.touch_app,
-                        AnnotationTool.rectangle => Icons.crop_square,
-                        AnnotationTool.circle => Icons.circle_outlined,
-                        AnnotationTool.arrow => Icons.arrow_outward,
-                        AnnotationTool.freehand => Icons.gesture,
-                      }),
-                    ),
-                  IconButton(
-                    onPressed: controller.canUndo ? controller.undo : null,
-                    color: Colors.white70,
-                    disabledColor: Colors.white24,
-                    icon: const Icon(Icons.undo),
-                  ),
-                  IconButton(
-                    onPressed: controller.canRedo ? controller.redo : null,
-                    color: Colors.white70,
-                    disabledColor: Colors.white24,
-                    icon: const Icon(Icons.redo),
-                  ),
-                  IconButton(
-                    onPressed: controller.isEmpty ? null : controller.clear,
-                    color: Colors.white70,
-                    disabledColor: Colors.white24,
-                    icon: const Icon(Icons.delete_outline),
-                  ),
-                ],
-              ),
-              // Transforms: non-destructive, so annotations follow the
-              // image and a crop can be undone.
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  IconButton(
-                    tooltip: 'Rotate',
-                    onPressed: controller.rotateClockwise,
-                    color: Colors.white70,
-                    icon: const Icon(Icons.rotate_90_degrees_cw),
-                  ),
-                  IconButton(
-                    tooltip: 'Mirror',
-                    onPressed: controller.toggleMirror,
-                    color: controller.transform.mirrored
-                        ? Colors.amber
-                        : Colors.white70,
-                    icon: const Icon(Icons.flip),
-                  ),
-                  IconButton(
-                    tooltip: 'Crop',
-                    onPressed: onStartCrop,
-                    color: controller.transform.cropRect != null
-                        ? Colors.amber
-                        : Colors.white70,
-                    icon: const Icon(Icons.crop),
-                  ),
-                  IconButton(
-                    tooltip: 'Reset transform',
-                    onPressed: controller.transform.isIdentity
-                        ? null
-                        : controller.resetTransform,
-                    color: Colors.white70,
-                    disabledColor: Colors.white24,
-                    icon: const Icon(Icons.crop_free),
-                  ),
-                ],
-              ),
-            ],
           ),
         );
       },
-    );
-  }
-}
-
-/// Confirm / cancel for crop mode. Nothing is applied until confirmed,
-/// so backing out leaves the image exactly as it was.
-class _CropBar extends StatelessWidget {
-  const _CropBar({required this.onCancel, required this.onConfirm});
-
-  final VoidCallback onCancel;
-  final VoidCallback onConfirm;
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Drag the corners or the frame',
-              style: TextStyle(color: Colors.white54, fontSize: 12),
-            ),
-            const SizedBox(height: 4),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                TextButton.icon(
-                  onPressed: onCancel,
-                  icon: const Icon(Icons.close),
-                  label: const Text('Cancel'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: Colors.white70,
-                  ),
-                ),
-                TextButton.icon(
-                  onPressed: onConfirm,
-                  icon: const Icon(Icons.check),
-                  label: const Text('Apply crop'),
-                  style: TextButton.styleFrom(foregroundColor: Colors.amber),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

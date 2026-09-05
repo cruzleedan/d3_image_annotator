@@ -51,6 +51,7 @@ class D3ImageAnnotator extends StatefulWidget {
     this.backgroundColor = Colors.black,
     this.cropping = false,
     this.onCropChanged,
+    this.cropInset = 28,
   });
 
   final ImageProvider image;
@@ -97,6 +98,18 @@ class D3ImageAnnotator extends StatefulWidget {
   /// Reports the frame as it is dragged, so a host can enable a confirm
   /// button or show live dimensions.
   final ValueChanged<NormalizedRect>? onCropChanged;
+
+  /// Margin left around the image while [cropping], in logical pixels.
+  ///
+  /// Without it the crop frame's corners sit against the screen edges,
+  /// where Android's back-gesture zone lives -- dragging the left-hand
+  /// corners triggers a navigate-back instead of a resize, which makes
+  /// them effectively ungrabbable on a gesture-nav device. Google Photos
+  /// insets the image during crop for the same reason.
+  ///
+  /// Applies only in crop mode: shrinking the image the rest of the time
+  /// would waste space for no benefit.
+  final double cropInset;
 
   @override
   State<D3ImageAnnotator> createState() => _D3ImageAnnotatorState();
@@ -153,6 +166,21 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
       ..scaleByDouble(scale, scale, 1, 1);
   }
 
+  /// Where the image sits, leaving room for crop handles when cropping.
+  Rect _contentRectFor(BoxConstraints constraints) {
+    final inset = widget.cropping ? widget.cropInset : 0.0;
+    final available = Size(
+      (constraints.maxWidth - inset * 2).clamp(1.0, double.infinity),
+      (constraints.maxHeight - inset * 2).clamp(1.0, double.infinity),
+    );
+    final rect = computeImageContentRect(
+      widgetSize: available,
+      contentSize: widget.controller.transform.resultSize(widget.imageSize),
+      fit: widget.fit,
+    );
+    return rect.shift(Offset(inset, inset));
+  }
+
   @override
   Widget build(BuildContext context) {
     // No InteractiveViewer. Two gesture recognizers cannot share these
@@ -184,16 +212,7 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
                 transform: _transform.value,
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    final contentRect = computeImageContentRect(
-                      widgetSize: Size(
-                        constraints.maxWidth,
-                        constraints.maxHeight,
-                      ),
-                      contentSize: widget.controller.transform.resultSize(
-                        widget.imageSize,
-                      ),
-                      fit: widget.fit,
-                    );
+                    final contentRect = _contentRectFor(constraints);
                     return Stack(
                       children: [
                         Positioned.fromRect(
@@ -226,16 +245,7 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
                 // pointer in this mode.
                 LayoutBuilder(
                   builder: (context, constraints) {
-                    final contentRect = computeImageContentRect(
-                      widgetSize: Size(
-                        constraints.maxWidth,
-                        constraints.maxHeight,
-                      ),
-                      contentSize: widget.controller.transform.resultSize(
-                        widget.imageSize,
-                      ),
-                      fit: widget.fit,
-                    );
+                    final contentRect = _contentRectFor(constraints);
                     return Stack(
                       fit: StackFit.expand,
                       children: [
@@ -286,6 +296,7 @@ class _TransformedImage extends StatelessWidget {
   final ImageProvider image;
   final ImageTransform imageTransform;
 
+  @override
   @override
   Widget build(BuildContext context) {
     // BoxFit.fill, not contain: the caller has already sized this box to
