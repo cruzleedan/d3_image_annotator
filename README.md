@@ -62,6 +62,47 @@ uses single-finger drag, which is the finger drawing wants
 `freehand`. Undo/redo is on the controller (`canUndo`, `undo()`,
 `canRedo`, `redo()`), bounded and snapshot-based.
 
+## Saving annotations
+
+**Annotations are data, not pixels.** Nothing is burned into the image —
+you store the geometry and keep it editable forever. A user can reopen a
+photo months later and move a mark someone else placed. Flattening
+happens only when producing something that cannot carry data, like a PDF
+(coming in a later release).
+
+```dart
+// Persist however you like -- a database column, a sidecar file, a sync
+// payload. This package writes nothing itself.
+final document = AnnotationDocument(
+  annotations: controller.annotations,
+  sourceImageSize: const Size(3000, 4000),
+);
+final json = jsonEncode(document.toJson());
+
+// Later, against the same image
+final restored = AnnotationDocument.fromJson(jsonDecode(json));
+final controller = AnnotationController(initial: restored.annotations);
+```
+
+Because geometry is normalized, a saved annotation stays valid if the
+file is re-encoded or resized. It is *not* valid against a different
+image — so the payload records the source's dimensions, and
+`classifyBinding` tells you what you are dealing with:
+
+```dart
+switch (classifyBinding(document, imageSize)) {
+  case AnnotationBinding.ok:            // render
+  case AnnotationBinding.sizeMismatch:  // wrong image, or deliberate re-association
+  case AnnotationBinding.missingImage:  // nothing to render against
+}
+```
+
+That last case is the one worth handling explicitly: annotations can
+outlive the file they describe, and an empty canvas would be a lie.
+
+The check is **advisory** — the package never refuses to decode, because
+only your app knows whether a mismatch is corruption or intent.
+
 ## Composing your own UI
 
 `D3ImageAnnotator` is a convenience. The overlay works standalone over
@@ -87,9 +128,9 @@ the burned-in export. One rendering path means the two cannot drift.
 
 ## Status
 
-Model, controller, painter, hit-testing, overlay, and the zoomable viewer
-are implemented, with 49 tests. Export (burning annotations into a JPEG)
-is not built yet.
+Model, controller, painter, hit-testing, overlay, the zoomable viewer,
+and JSON serialization are implemented, with 75 tests. Rendering an
+annotated image to a file is not built yet, nor are crop/rotate/mirror.
 
 Text and highlight annotations are deliberately deferred — text drags in
 IME and font-metrics work that is its own problem.
