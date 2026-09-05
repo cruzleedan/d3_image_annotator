@@ -32,13 +32,21 @@ void main() {
     AnnotationTool tool = AnnotationTool.rectangle,
     TransformationController? transform,
     bool enableZoom = true,
+    AnnotationController? controller,
   }) async {
     tester.view.physicalSize = viewport;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final controller = AnnotationController();
-    addTearDown(controller.dispose);
+    // Only dispose what this helper created; a caller-supplied
+    // controller is the caller's to clean up.
+    final AnnotationController c;
+    if (controller != null) {
+      c = controller;
+    } else {
+      c = AnnotationController();
+      addTearDown(c.dispose);
+    }
 
     await tester.pumpWidget(
       MaterialApp(
@@ -49,7 +57,7 @@ void main() {
             child: D3ImageAnnotator(
               image: MemoryImage(_pngBytes),
               imageSize: imageSize,
-              controller: controller,
+              controller: c,
               tool: tool,
               enableZoom: enableZoom,
               transformationController: transform,
@@ -59,7 +67,7 @@ void main() {
       ),
     );
     await tester.pump();
-    return controller;
+    return c;
   }
 
   // Flutter's pan recognizer swallows the first ~18 logical pixels as
@@ -230,6 +238,211 @@ void main() {
         closeTo(4, 1e-9),
         reason: 'stroke must scale with the canvas, not stay pixel-constant',
       );
+    });
+  });
+
+  group('drawing on a transformed image', () {
+    /// The guarantee that makes rotate/crop safe: a user draws on the
+    /// *transformed* view, and the mark must be stored against the
+    /// *original* image. If these disagree, every annotation shifts the
+    /// moment a photo is rotated.
+    testWidgets('a mark drawn on a rotated view stores original coords', (
+      tester,
+    ) async {
+      final rotated = AnnotationController()..rotateClockwise();
+      addTearDown(rotated.dispose);
+      await pump(tester, controller: rotated);
+
+      // Drag across the middle of the rotated view.
+      await tester.dragFrom(at(0.3, 0.3), at(0.7, 0.7) - at(0.3, 0.3));
+      await tester.pumpAndSettle();
+
+      expect(rotated.annotations, hasLength(1));
+      final rect = (rotated.annotations.single as RectangleAnnotation).rect;
+
+      // Stored geometry must be valid original-image coordinates, not
+      // view coordinates: still in range, and a real area.
+      expect(rect.left, inInclusiveRange(0, 1));
+      expect(rect.right, inInclusiveRange(0, 1));
+      expect(rect.width, greaterThan(0));
+      expect(rect.height, greaterThan(0));
+    });
+
+    testWidgets('what is drawn on a rotated view round-trips to the view', (
+      tester,
+    ) async {
+      final rotated = AnnotationController()..rotateClockwise();
+      addTearDown(rotated.dispose);
+      await pump(tester, controller: rotated);
+
+      await tester.dragFrom(at(0.25, 0.25), at(0.6, 0.6) - at(0.25, 0.25));
+      await tester.pumpAndSettle();
+
+      final stored = (rotated.annotations.single as RectangleAnnotation).rect;
+
+      // Mapping the stored corners forward through the same transform
+      // should land back where the drag actually happened in view
+      // space.
+      //
+      // Note the expected values are NOT 0.25..0.6. `at()` computes
+      // pixels against the *unrotated* content rect (500x1000, inset at
+      // x=250), but a quarter turn makes the rotated rect 1000x500 and
+      // full-bleed -- so the same pixels sit at a different fraction of
+      // it. x=375px is 0.375 of 1000, not 0.25. Asserting 0.25 here is
+      // what the earlier version did, and it only passed while the
+      // overlay was wrongly measuring the untransformed size.
+      final mappedEnd = rotated.transform.mapPoint(
+        NormalizedPoint(stored.right, stored.bottom),
+      );
+      final mappedStart = rotated.transform.mapPoint(
+        NormalizedPoint(stored.left, stored.top),
+      );
+
+      final xs = [mappedStart.x, mappedEnd.x]..sort();
+      expect(xs.first, closeTo(0.375, 0.03));
+      expect(xs.last, closeTo(0.55, 0.03));
+    });
+
+    testWidgets('existing marks are unchanged by rotating', (tester) async {
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+      await pump(tester, controller: c);
+
+      await tester.dragFrom(at(0.2, 0.2), at(0.6, 0.6) - at(0.2, 0.2));
+      await tester.pumpAndSettle();
+      final before = (c.annotations.single as RectangleAnnotation).rect;
+
+      c.rotateClockwise();
+      await tester.pumpAndSettle();
+
+      final after = (c.annotations.single as RectangleAnnotation).rect;
+      expect(after, before,
+          reason: 'geometry is stored against the original image');
+    });
+
+    testWidgets('cropping does not delete marks outside the crop', (
+      tester,
+    ) async {
+      // Clipping, not deleting: widening the crop must bring them back.
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+      await pump(tester, controller: c);
+
+      await tester.dragFrom(at(0.05, 0.05), at(0.2, 0.2) - at(0.05, 0.05));
+      await tester.pumpAndSettle();
+      expect(c.annotations, hasLength(1));
+
+      c.crop(NormalizedRect(left: 0.6, top: 0.6, right: 1, bottom: 1));
+      await tester.pumpAndSettle();
+      expect(c.annotations, hasLength(1),
+          reason: 'a mark outside the crop is clipped, never removed');
+
+      c.crop(null);
+      await tester.pumpAndSettle();
+      expect(c.annotations, hasLength(1));
+    });
+  });
+
+  group('the overlay is sized to the transformed image', () {
+    testWidgets('rotating resizes the annotation box with the image', (
+      tester,
+    ) async {
+      // The bug this pins: the image is laid out by BoxFit against the
+      // *rotated* dimensions, so a portrait photo shrinks when turned
+      // sideways in a portrait viewport. The overlay was still measuring
+      // the untransformed size, so marks rotated correctly but came out
+      // oversized -- drawn against a box bigger than the picture.
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+      await pump(tester, controller: c);
+
+      final before = tester.getSize(find.byType(CustomPaint).first);
+
+      c.rotateClockwise();
+      await tester.pumpAndSettle();
+
+      // 500x1000 image in a 1000x1000 viewport: contain gives 500x1000
+      // upright, and 1000x500 on its side. The painted content must
+      // follow, not stay 500x1000.
+      final overlay = tester.widget<AnnotationOverlay>(
+        find.byType(AnnotationOverlay),
+      );
+      final rect = computeImageContentRect(
+        widgetSize: before,
+        contentSize: overlay.imageTransform.resultSize(overlay.imageSize),
+        fit: overlay.fit,
+      );
+
+      expect(rect.width, closeTo(1000, 1));
+      expect(rect.height, closeTo(500, 1));
+    });
+
+    testWidgets('cropping shrinks the annotation box too', (tester) async {
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+      await pump(tester, controller: c);
+
+      c.crop(NormalizedRect(left: 0.25, top: 0.25, right: 0.75, bottom: 0.75));
+      await tester.pumpAndSettle();
+
+      final overlay = tester.widget<AnnotationOverlay>(
+        find.byType(AnnotationOverlay),
+      );
+      final result = overlay.imageTransform.resultSize(overlay.imageSize);
+
+      // Half the image in each axis.
+      expect(result.width, closeTo(250, 1));
+      expect(result.height, closeTo(500, 1));
+    });
+  });
+
+  group('image and annotations share one rect after cropping', () {
+    testWidgets('the image is placed in the overlay content rect', (
+      tester,
+    ) async {
+      // The bug this pins: the image used to fill the whole viewport
+      // while the overlay computed an aspect-correct rect for the
+      // cropped result. Cropping changes the aspect ratio, so the two
+      // described different rectangles and every mark sat off its
+      // content once a crop was applied.
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+      await pump(tester, controller: c);
+
+      c.crop(NormalizedRect(left: 0.25, top: 0, right: 0.75, bottom: 1));
+      await tester.pumpAndSettle();
+
+      // ClipRect, not Image: the Image is deliberately oversized inside
+      // the clip (that is how the crop window works), so measuring it
+      // reports the scaled-up source rather than what is visible.
+      final imageRect = tester.getRect(find.byType(ClipRect).first);
+      final overlay = tester.widget<AnnotationOverlay>(
+        find.byType(AnnotationOverlay),
+      );
+      final expected = computeImageContentRect(
+        widgetSize: viewport,
+        contentSize: overlay.imageTransform.resultSize(overlay.imageSize),
+        fit: overlay.fit,
+      );
+
+      expect(imageRect.width, closeTo(expected.width, 1));
+      expect(imageRect.height, closeTo(expected.height, 1));
+    });
+
+    testWidgets('a cropped image keeps the cropped aspect ratio', (
+      tester,
+    ) async {
+      // 500x1000 image cropped to the middle half horizontally is
+      // 250x1000 -- a 1:4 sliver, not the original 1:2.
+      final c = AnnotationController();
+      addTearDown(c.dispose);
+      await pump(tester, controller: c);
+
+      c.crop(NormalizedRect(left: 0.25, top: 0, right: 0.75, bottom: 1));
+      await tester.pumpAndSettle();
+
+      final imageRect = tester.getRect(find.byType(ClipRect).first);
+      expect(imageRect.width / imageRect.height, closeTo(0.25, 0.01));
     });
   });
 }

@@ -4,6 +4,7 @@ import '../coordinates/coordinate_space.dart';
 import '../coordinates/normalized_point.dart';
 import '../coordinates/normalized_rect.dart';
 import '../geometry/image_fit.dart';
+import '../geometry/image_transform.dart';
 import '../geometry/content_rect.dart';
 import 'annotation.dart';
 import 'annotation_controller.dart';
@@ -34,6 +35,7 @@ class AnnotationOverlay extends StatefulWidget {
     this.onScaleStart,
     this.onScaleUpdate,
     this.onScaleEnd,
+    this.imageTransform = ImageTransform.identity,
   });
 
   final AnnotationController controller;
@@ -74,6 +76,13 @@ class AnnotationOverlay extends StatefulWidget {
   final void Function(ScaleUpdateDetails)? onScaleUpdate;
   final void Function(ScaleEndDetails)? onScaleEnd;
 
+  /// Rotate / mirror / crop applied to the image beneath.
+  ///
+  /// Marks are drawn on the *transformed* view but stored against the
+  /// *original* image, so every pointer position is unmapped through
+  /// this before an annotation is built.
+  final ImageTransform imageTransform;
+
 
   @override
   State<AnnotationOverlay> createState() => _AnnotationOverlayState();
@@ -102,9 +111,19 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     return 'a${DateTime.now().microsecondsSinceEpoch}_${_idCounter++}';
   }
 
+  /// Where the *transformed* image sits inside this widget.
+  ///
+  /// Sized against the transform result size, not the raw imageSize: a quarter
+  /// turn swaps the image pixel dimensions, so a portrait photo laid
+  /// out under `contain` in a portrait viewport shrinks noticeably when
+  /// rotated. The image itself is laid out that way by BoxFit, so an
+  /// overlay measuring the untransformed size would draw annotations
+  /// against a box larger than the picture -- marks would rotate
+  /// correctly but come out oversized. A crop shrinks the result the
+  /// same way.
   Rect _contentRect(Size widgetSize) => computeImageContentRect(
     widgetSize: widgetSize,
-    contentSize: widget.imageSize,
+    contentSize: widget.imageTransform.resultSize(widget.imageSize),
     fit: widget.fit,
   );
 
@@ -121,9 +140,19 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     return MatrixUtils.transformPoint(inverted, local);
   }
 
-  void _onPanStart(Offset localRaw, Rect contentRect) {
+  /// Screen position to a point in the *original* image's space.
+  ///
+  /// Two steps, and the order matters: undo the zoom/pan first (that is
+  /// widget-space), then undo the image transform (that is image-space).
+  NormalizedPoint _toOriginalImagePoint(Offset localRaw, Rect contentRect) {
     final local = _toImageSpace(localRaw);
-    final point = toNormalized(local, contentRect);
+    final inView = toNormalized(local, contentRect);
+    if (widget.imageTransform.isIdentity) return inView;
+    return widget.imageTransform.unmapPoint(inView.x, inView.y);
+  }
+
+  void _onPanStart(Offset localRaw, Rect contentRect) {
+    final point = _toOriginalImagePoint(localRaw, contentRect);
 
     if (widget.tool == AnnotationTool.select) {
       final hit = hitTestAnnotations(
@@ -170,8 +199,7 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
   }
 
   void _onPanUpdate(Offset localRaw, Rect contentRect) {
-    final local = _toImageSpace(localRaw);
-    final point = toNormalized(local, contentRect);
+    final point = _toOriginalImagePoint(localRaw, contentRect);
 
     if (widget.tool == AnnotationTool.select) {
       _dragSelection(point);
@@ -296,6 +324,7 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
                     annotations: [...widget.controller.annotations, ?draft],
                     contentRect: contentRect,
                     selectedId: widget.controller.selectedId,
+                    transform: widget.imageTransform,
                   ),
                 ),
               ),

@@ -2,9 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../annotations/annotation_controller.dart';
 import '../annotations/annotation_overlay_widget.dart';
+import '../annotations/annotation_painter.dart';
+import '../coordinates/normalized_rect.dart';
+import '../geometry/content_rect.dart';
 import '../annotations/annotation_style.dart';
 import '../annotations/annotation_tool.dart';
 import '../geometry/image_fit.dart';
+import '../geometry/image_transform.dart';
+import 'crop_overlay.dart';
 
 /// A zoomable, annotatable image.
 ///
@@ -44,6 +49,8 @@ class D3ImageAnnotator extends StatefulWidget {
     this.enableZoom = true,
     this.transformationController,
     this.backgroundColor = Colors.black,
+    this.cropping = false,
+    this.onCropChanged,
   });
 
   final ImageProvider image;
@@ -75,6 +82,21 @@ class D3ImageAnnotator extends StatefulWidget {
   final TransformationController? transformationController;
 
   final Color backgroundColor;
+
+  /// Shows the interactive crop frame, suspending drawing and zoom.
+  ///
+  /// Crop is a mode rather than a tool: while it is on, every drag
+  /// adjusts the frame. That keeps it clear of the gesture contention
+  /// that drawing and zoom already have to share, and matches how the
+  /// Pixel and iOS editors behave.
+  ///
+  /// Nothing is applied while cropping -- the host decides when to
+  /// commit the frame via `controller.crop`, so cancelling is free.
+  final bool cropping;
+
+  /// Reports the frame as it is dragged, so a host can enable a confirm
+  /// button or show live dimensions.
+  final ValueChanged<NormalizedRect>? onCropChanged;
 
   @override
   State<D3ImageAnnotator> createState() => _D3ImageAnnotatorState();
@@ -145,27 +167,102 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
     return ColoredBox(
       color: widget.backgroundColor,
       child: AnimatedBuilder(
-        animation: _transform,
+        // Both: zoom lives on _transform, rotate/mirror/crop on the
+        // controller. A change to either has to repaint.
+        animation: Listenable.merge([_transform, widget.controller]),
         builder: (context, _) {
           return Stack(
             fit: StackFit.expand,
             children: [
+              // The image is placed in the *same* content rect the
+              // overlay computes, not simply told to fill the viewport.
+              // Cropping changes the aspect ratio, so a stretched-to-fit
+              // image and an aspect-correct annotation layer end up
+              // describing different rectangles -- marks then sit off
+              // their content once a crop is applied.
               Transform(
                 transform: _transform.value,
-                child: Image(
-                  image: widget.image,
-                  fit: _boxFitFor(widget.fit),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final contentRect = computeImageContentRect(
+                      widgetSize: Size(
+                        constraints.maxWidth,
+                        constraints.maxHeight,
+                      ),
+                      contentSize: widget.controller.transform.resultSize(
+                        widget.imageSize,
+                      ),
+                      fit: widget.fit,
+                    );
+                    return Stack(
+                      children: [
+                        Positioned.fromRect(
+                          rect: contentRect,
+                          child: _TransformedImage(
+                            image: widget.image,
+                            imageTransform: widget.controller.transform,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
               ),
-              AnnotationOverlay(
-                controller: widget.controller,
-                imageSize: widget.imageSize,
-                tool: widget.tool,
-                fit: widget.fit,
-                transform: _transform.value,
-                onScaleStart: _onScaleStart,
-                onScaleUpdate: _onScaleUpdate,
-              ),
+              if (!widget.cropping)
+                AnnotationOverlay(
+                  controller: widget.controller,
+                  imageSize: widget.imageSize,
+                  tool: widget.tool,
+                  fit: widget.fit,
+                  transform: _transform.value,
+                  imageTransform: widget.controller.transform,
+                  onScaleStart: _onScaleStart,
+                  onScaleUpdate: _onScaleUpdate,
+                )
+              else
+                // Annotations stay visible while cropping so the user can
+                // see what the frame will keep -- but they are painted
+                // without gestures, since the crop frame owns every
+                // pointer in this mode.
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final contentRect = computeImageContentRect(
+                      widgetSize: Size(
+                        constraints.maxWidth,
+                        constraints.maxHeight,
+                      ),
+                      contentSize: widget.controller.transform.resultSize(
+                        widget.imageSize,
+                      ),
+                      fit: widget.fit,
+                    );
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        IgnorePointer(
+                          child: CustomPaint(
+                            painter: AnnotationPainter(
+                              annotations: widget.controller.annotations,
+                              contentRect: contentRect,
+                              transform: widget.controller.transform,
+                            ),
+                          ),
+                        ),
+                        CropOverlay(
+                          contentRect: contentRect,
+                          // Opens wrapping the whole image. The frame's
+                          // black border plus white corner arms stay
+                          // visible against any photo, so no inset is
+                          // needed to make the handles findable.
+                          initialCrop:
+                              widget.controller.transform.effectiveCrop,
+                          onChanged: (rect) =>
+                              widget.onCropChanged?.call(rect),
+                        ),
+                      ],
+                    );
+                  },
+                ),
             ],
           );
         },
@@ -173,8 +270,60 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
     );
   }
 
-  static BoxFit _boxFitFor(ImageFit fit) => switch (fit) {
-    ImageFit.contain => BoxFit.contain,
-    ImageFit.cover => BoxFit.cover,
-  };
 }
+
+/// Draws the image with the rotate / mirror / crop applied.
+///
+/// Crop is done with alignment and a fitted box rather than by cutting
+/// pixels: nothing is destroyed, so clearing the crop restores the
+/// original view immediately.
+class _TransformedImage extends StatelessWidget {
+  const _TransformedImage({
+    required this.image,
+    required this.imageTransform,
+  });
+
+  final ImageProvider image;
+  final ImageTransform imageTransform;
+
+  @override
+  Widget build(BuildContext context) {
+    // BoxFit.fill, not contain: the caller has already sized this box to
+    // the transformed image's exact aspect ratio, so filling it is
+    // correct and letterboxing inside it would inset the picture away
+    // from the annotations.
+    Widget child = Image(image: image, fit: BoxFit.fill);
+
+    final crop = imageTransform.cropRect;
+    if (crop != null) {
+      // FractionallySizedBox with a negative-space alignment shows only
+      // the cropped region, scaled to fill. The full image is still
+      // there; this is a window onto it.
+      child = ClipRect(
+        child: FractionallySizedBox(
+          widthFactor: crop.width == 0 ? 1 : 1 / crop.width,
+          heightFactor: crop.height == 0 ? 1 : 1 / crop.height,
+          alignment: Alignment(
+            crop.width >= 1 ? 0 : (crop.left / (1 - crop.width)) * 2 - 1,
+            crop.height >= 1 ? 0 : (crop.top / (1 - crop.height)) * 2 - 1,
+          ),
+          child: child,
+        ),
+      );
+    }
+
+    if (imageTransform.mirrored) {
+      child = Transform.flip(flipX: true, child: child);
+    }
+
+    if (imageTransform.quarterTurns != 0) {
+      child = RotatedBox(
+        quarterTurns: imageTransform.quarterTurns,
+        child: child,
+      );
+    }
+
+    return child;
+  }
+}
+

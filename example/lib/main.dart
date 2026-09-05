@@ -118,6 +118,11 @@ class _AnnotatorDemoState extends State<_AnnotatorDemo> {
   AnnotationTool _tool = AnnotationTool.rectangle;
   Uint8List? _bytes;
 
+  /// Crop is a mode: while it is on, drags adjust the frame instead of
+  /// drawing, and nothing is applied until it is confirmed.
+  bool _cropping = false;
+  NormalizedRect? _pendingCrop;
+
   @override
   void initState() {
     super.initState();
@@ -159,13 +164,33 @@ class _AnnotatorDemoState extends State<_AnnotatorDemo> {
                     controller: _controller,
                     tool: _tool,
                     transformationController: _transform,
+                    cropping: _cropping,
+                    onCropChanged: (rect) => _pendingCrop = rect,
                   ),
                 ),
-                _Toolbar(
-                  tool: _tool,
-                  controller: _controller,
-                  onToolChanged: (t) => setState(() => _tool = t),
-                ),
+                if (_cropping)
+                  _CropBar(
+                    onCancel: () => setState(() {
+                      _cropping = false;
+                      _pendingCrop = null;
+                    }),
+                    onConfirm: () => setState(() {
+                      final rect = _pendingCrop;
+                      if (rect != null) _controller.crop(rect);
+                      _cropping = false;
+                      _pendingCrop = null;
+                    }),
+                  )
+                else
+                  _Toolbar(
+                    tool: _tool,
+                    controller: _controller,
+                    onToolChanged: (t) => setState(() => _tool = t),
+                    onStartCrop: () => setState(() {
+                      _cropping = true;
+                      _pendingCrop = _controller.transform.effectiveCrop;
+                    }),
+                  ),
               ],
             ),
     );
@@ -177,11 +202,13 @@ class _Toolbar extends StatelessWidget {
     required this.tool,
     required this.controller,
     required this.onToolChanged,
+    required this.onStartCrop,
   });
 
   final AnnotationTool tool;
   final AnnotationController controller;
   final ValueChanged<AnnotationTool> onToolChanged;
+  final VoidCallback onStartCrop;
 
   @override
   Widget build(BuildContext context) {
@@ -235,10 +262,96 @@ class _Toolbar extends StatelessWidget {
                   ),
                 ],
               ),
+              // Transforms: non-destructive, so annotations follow the
+              // image and a crop can be undone.
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  IconButton(
+                    tooltip: 'Rotate',
+                    onPressed: controller.rotateClockwise,
+                    color: Colors.white70,
+                    icon: const Icon(Icons.rotate_90_degrees_cw),
+                  ),
+                  IconButton(
+                    tooltip: 'Mirror',
+                    onPressed: controller.toggleMirror,
+                    color: controller.transform.mirrored
+                        ? Colors.amber
+                        : Colors.white70,
+                    icon: const Icon(Icons.flip),
+                  ),
+                  IconButton(
+                    tooltip: 'Crop',
+                    onPressed: onStartCrop,
+                    color: controller.transform.cropRect != null
+                        ? Colors.amber
+                        : Colors.white70,
+                    icon: const Icon(Icons.crop),
+                  ),
+                  IconButton(
+                    tooltip: 'Reset transform',
+                    onPressed: controller.transform.isIdentity
+                        ? null
+                        : controller.resetTransform,
+                    color: Colors.white70,
+                    disabledColor: Colors.white24,
+                    icon: const Icon(Icons.crop_free),
+                  ),
+                ],
+              ),
             ],
           ),
         );
       },
+    );
+  }
+}
+
+/// Confirm / cancel for crop mode. Nothing is applied until confirmed,
+/// so backing out leaves the image exactly as it was.
+class _CropBar extends StatelessWidget {
+  const _CropBar({required this.onCancel, required this.onConfirm});
+
+  final VoidCallback onCancel;
+  final VoidCallback onConfirm;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Drag the corners or the frame',
+              style: TextStyle(color: Colors.white54, fontSize: 12),
+            ),
+            const SizedBox(height: 4),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                TextButton.icon(
+                  onPressed: onCancel,
+                  icon: const Icon(Icons.close),
+                  label: const Text('Cancel'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white70,
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: onConfirm,
+                  icon: const Icon(Icons.check),
+                  label: const Text('Apply crop'),
+                  style: TextButton.styleFrom(foregroundColor: Colors.amber),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -4,7 +4,9 @@ import 'dart:ui' show PathMetric;
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
+import '../coordinates/normalized_point.dart';
 import '../coordinates/normalized_rect.dart';
+import '../geometry/image_transform.dart';
 import 'annotation.dart';
 
 /// Renders annotations onto a canvas.
@@ -24,10 +26,42 @@ void paintAnnotations(
   Rect contentRect,
   List<Annotation> annotations, {
   String? selectedId,
+  ImageTransform transform = ImageTransform.identity,
 }) {
-  // Stroke widths are a fraction of the shorter side so weight scales
-  // with the image rather than the device.
-  final shorterSide = math.min(contentRect.width, contentRect.height);
+  // Clip to the visible region so a mark straddling the crop boundary
+  // keeps its visible half and loses the rest. Not hidden, not deleted:
+  // the stored geometry is untouched, so widening the crop brings the
+  // clipped part straight back.
+  //
+  // The export path calls this same function, so a mark clipped on
+  // screen is clipped identically in the saved file -- if the two
+  // differed, a partly-clipped annotation would reappear whole in a
+  // report.
+  if (transform.cropRect != null) {
+    canvas.save();
+    canvas.clipRect(contentRect);
+  }
+
+  // Stroke width is a fraction of the *whole image* as currently
+  // displayed, not of the visible content rect.
+  //
+  // Those differ under crop, and using the rect is wrong: cropping
+  // shrinks the result, which `contain` then scales back up to fill the
+  // viewport. The rect's shorter side barely changes, so the stroke
+  // stays the same pixel width while the content beneath it is
+  // magnified -- the mark comes out visibly thinner relative to the
+  // feature it marks. Dividing by the crop's extent undoes that
+  // magnification, so a mark keeps its weight relative to the picture,
+  // which is the rule this package documents: annotations scale *with*
+  // the image.
+  final crop = transform.effectiveCrop;
+  final fullWidth = crop.width == 0
+      ? contentRect.width
+      : contentRect.width / crop.width;
+  final fullHeight = crop.height == 0
+      ? contentRect.height
+      : contentRect.height / crop.height;
+  final shorterSide = math.min(fullWidth, fullHeight);
 
   for (final annotation in annotations) {
     final paint = Paint()
@@ -44,28 +78,72 @@ void paintAnnotations(
     // invisible annotation.
     switch (annotation) {
       case RectangleAnnotation(:final rect):
-        canvas.drawRect(rect.toRect(contentRect), paint);
+        canvas.drawRect(_mapRect(rect, contentRect, transform), paint);
       case CircleAnnotation(:final rect):
-        canvas.drawOval(rect.toRect(contentRect), paint);
+        canvas.drawOval(_mapRect(rect, contentRect, transform), paint);
       case ArrowAnnotation(:final start, :final end):
         _paintArrow(
           canvas,
-          start.toOffset(contentRect),
-          end.toOffset(contentRect),
+          _mapOffset(start, contentRect, transform),
+          _mapOffset(end, contentRect, transform),
           paint,
         );
       case FreehandAnnotation(:final points):
         _paintFreehand(
           canvas,
-          [for (final p in points) p.toOffset(contentRect)],
+          [for (final p in points) _mapOffset(p, contentRect, transform)],
           paint,
         );
     }
 
     if (annotation.id == selectedId) {
-      _paintSelection(canvas, annotation.bounds.toRect(contentRect), paint);
+      _paintSelection(
+        canvas,
+        _mapRect(annotation.bounds, contentRect, transform),
+        paint,
+      );
     }
   }
+
+  if (transform.cropRect != null) canvas.restore();
+}
+
+/// Projects a normalized point through [transform] into widget space.
+Offset _mapOffset(
+  NormalizedPoint point,
+  Rect contentRect,
+  ImageTransform transform,
+) {
+  final mapped = transform.mapPoint(point);
+  return Offset(
+    contentRect.left + mapped.x * contentRect.width,
+    contentRect.top + mapped.y * contentRect.height,
+  );
+}
+
+/// Projects a normalized rect through [transform].
+///
+/// Built from the mapped corners rather than mapping width and height,
+/// since a 90-degree rotation swaps the axes and would otherwise produce
+/// a rect of the wrong shape. `Rect.fromPoints` re-normalises the corner
+/// order, so a rotation that puts left past right still yields a valid
+/// rect.
+Rect _mapRect(
+  NormalizedRect rect,
+  Rect contentRect,
+  ImageTransform transform,
+) {
+  final a = _mapOffset(
+    NormalizedPoint(rect.left, rect.top),
+    contentRect,
+    transform,
+  );
+  final b = _mapOffset(
+    NormalizedPoint(rect.right, rect.bottom),
+    contentRect,
+    transform,
+  );
+  return Rect.fromPoints(a, b);
 }
 
 void _paintArrow(Canvas canvas, Offset start, Offset end, Paint paint) {
@@ -168,11 +246,13 @@ class AnnotationPainter extends CustomPainter {
     required this.annotations,
     required this.contentRect,
     this.selectedId,
+    this.transform = ImageTransform.identity,
   });
 
   final List<Annotation> annotations;
   final Rect contentRect;
   final String? selectedId;
+  final ImageTransform transform;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -181,6 +261,7 @@ class AnnotationPainter extends CustomPainter {
       contentRect,
       annotations,
       selectedId: selectedId,
+      transform: transform,
     );
   }
 
@@ -188,6 +269,7 @@ class AnnotationPainter extends CustomPainter {
   bool shouldRepaint(AnnotationPainter oldDelegate) {
     return oldDelegate.contentRect != contentRect ||
         oldDelegate.selectedId != selectedId ||
+        oldDelegate.transform != transform ||
         !listEquals(oldDelegate.annotations, annotations);
   }
 }
