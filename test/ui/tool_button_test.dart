@@ -178,4 +178,105 @@ void main() {
       }
     });
   });
+
+  group('history bar', () {
+    Future<AnnotationController> pumpHistory(WidgetTester tester) async {
+      final controller = AnnotationController();
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            appBar: AppBar(actions: [D3HistoryBar(controller: controller)]),
+            body: const SizedBox.expand(),
+          ),
+        ),
+      );
+      return controller;
+    }
+
+    RectangleAnnotation mark(String id) => RectangleAnnotation(
+      id: id,
+      style: const AnnotationStyle(),
+      rect: NormalizedRect(left: 0.1, top: 0.1, right: 0.5, bottom: 0.5),
+    );
+
+    testWidgets('undo and redo are reachable without changing tool group', (
+      tester,
+    ) async {
+      // The point of putting these in the top bar: undo is a safety
+      // control, and hunting for it through a group switch leaves the
+      // mistake on screen in the meantime.
+      final controller = await pumpHistory(tester);
+
+      controller.add(mark('a'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.undo));
+      await tester.pumpAndSettle();
+      expect(controller.annotations, isEmpty);
+
+      await tester.tap(find.byIcon(Icons.redo));
+      await tester.pumpAndSettle();
+      expect(controller.annotations, hasLength(1));
+    });
+
+    testWidgets('undo and redo are disabled when there is no history', (
+      tester,
+    ) async {
+      await pumpHistory(tester);
+
+      final undo = tester.getSemantics(find.byIcon(Icons.undo));
+      expect(undo.flagsCollection.isEnabled.name, 'isFalse');
+    });
+
+    testWidgets('the delete control clears when nothing is selected', (
+      tester,
+    ) async {
+      final controller = await pumpHistory(tester);
+      controller.add(mark('a'));
+      controller.add(mark('b'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      await tester.pumpAndSettle();
+
+      expect(controller.annotations, isEmpty);
+    });
+
+    testWidgets('the delete control removes only the selection', (
+      tester,
+    ) async {
+      // Same button, different meaning -- so the icon changes with it
+      // rather than leaving the user to guess which it will do.
+      final controller = await pumpHistory(tester);
+      controller.add(mark('a'));
+      controller.add(mark('b'));
+      controller.select('a');
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.delete), findsOneWidget,
+          reason: 'a filled icon signals it will delete the selection');
+
+      await tester.tap(find.byIcon(Icons.delete));
+      await tester.pumpAndSettle();
+
+      expect(controller.annotations.map((x) => x.id), ['b']);
+    });
+
+    testWidgets('history controls meet the touch minimum', (tester) async {
+      final controller = await pumpHistory(tester);
+      controller.add(mark('a'));
+      await tester.pumpAndSettle();
+
+      for (final icon in [Icons.undo, Icons.redo, Icons.delete_outline]) {
+        final found = find.byIcon(icon);
+        if (found.evaluate().isEmpty) continue;
+        final size = tester.getSize(
+          find.ancestor(of: found, matching: find.byType(ConstrainedBox)).first,
+        );
+        expect(size.width, greaterThanOrEqualTo(kMinimumTouchTarget));
+        expect(size.height, greaterThanOrEqualTo(kMinimumTouchTarget));
+      }
+    });
+  });
 }

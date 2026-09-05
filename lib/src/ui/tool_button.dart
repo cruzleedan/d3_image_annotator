@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../annotations/annotation_controller.dart';
+
 /// Minimum touch target, in logical pixels.
 ///
 /// 48dp is the floor set by both Material 3 and WCAG 2.5.8 Target Size
@@ -207,6 +209,113 @@ class D3ToolGroupBar<T> extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Undo / redo / clear, sized for a top bar.
+///
+/// These live apart from the tool groups on purpose. Undo is a safety
+/// control, not a tool: if reaching it means switching groups first, a
+/// mistake stays on screen while the user hunts for the fix. Tools are
+/// things you choose between; history is something you always want at
+/// hand. The Pixel camera keeps them separate for the same reason.
+///
+/// Targets meet [kMinimumTouchTarget] like every other control here.
+class D3HistoryBar extends StatelessWidget {
+  const D3HistoryBar({
+    super.key,
+    required this.controller,
+    this.foregroundColor = Colors.white70,
+  });
+
+  final AnnotationController controller;
+  final Color foregroundColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final hasSelection = controller.selectedId != null;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _HistoryAction(
+              icon: Icons.undo,
+              tooltip: 'Undo',
+              color: foregroundColor,
+              onPressed: controller.canUndo ? controller.undo : null,
+            ),
+            _HistoryAction(
+              icon: Icons.redo,
+              tooltip: 'Redo',
+              color: foregroundColor,
+              onPressed: controller.canRedo ? controller.redo : null,
+            ),
+            // One control for both: removes the selection when there is
+            // one, otherwise clears everything. The tooltip and tint say
+            // which, so the difference is not hidden behind a guess.
+            _HistoryAction(
+              icon: hasSelection ? Icons.delete : Icons.delete_outline,
+              tooltip: hasSelection ? 'Delete selected' : 'Clear all',
+              color: hasSelection ? Colors.redAccent : foregroundColor,
+              onPressed: controller.isEmpty
+                  ? null
+                  : () {
+                      final id = controller.selectedId;
+                      if (id != null) {
+                        controller.remove(id);
+                      } else {
+                        controller.clear();
+                      }
+                    },
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _HistoryAction extends StatelessWidget {
+  const _HistoryAction({
+    required this.icon,
+    required this.tooltip,
+    required this.color,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final Color color;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      enabled: onPressed != null,
+      label: tooltip,
+      excludeSemantics: true,
+      child: Tooltip(
+        message: tooltip,
+        child: InkWell(
+          onTap: onPressed,
+          customBorder: const CircleBorder(),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              minWidth: kMinimumTouchTarget,
+              minHeight: kMinimumTouchTarget,
+            ),
+            child: Icon(
+              icon,
+              color: onPressed == null ? Colors.white24 : color,
+              size: 22,
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -146,6 +146,11 @@ class _AnnotatorDemoState extends State<_AnnotatorDemo> {
       appBar: AppBar(
         title: const Text('d3_image_annotator'),
         actions: [
+          // Undo/redo/clear live here rather than in a tool group.
+          // Undo is a safety control: having to switch groups to reach
+          // it leaves a mistake on screen while the user hunts for the
+          // fix.
+          D3HistoryBar(controller: _controller),
           IconButton(
             tooltip: 'Reset zoom',
             onPressed: () => _transform.value = Matrix4.identity(),
@@ -202,7 +207,7 @@ class _AnnotatorDemoState extends State<_AnnotatorDemo> {
 /// Grouping keeps the row short enough to read at a glance rather than
 /// making the user scan a long undifferentiated list of icons -- the
 /// arrangement the Pixel camera uses.
-enum _ToolGroup { draw, transform, history }
+enum _ToolGroup { draw, transform }
 
 class _Toolbar extends StatefulWidget {
   const _Toolbar({
@@ -240,7 +245,6 @@ class _ToolbarState extends State<_Toolbar> {
                 groups: const {
                   _ToolGroup.draw: 'Draw',
                   _ToolGroup.transform: 'Adjust',
-                  _ToolGroup.history: 'Edit',
                 },
                 selected: _group,
                 onSelected: (g) => setState(() => _group = g),
@@ -300,37 +304,6 @@ class _ToolbarState extends State<_Toolbar> {
           onPressed: controller.transform.isIdentity
               ? null
               : controller.resetTransform,
-        ),
-      ],
-      _ToolGroup.history => [
-        D3ToolButton(
-          icon: Icons.undo,
-          label: 'Undo',
-          onPressed: controller.canUndo ? controller.undo : null,
-        ),
-        D3ToolButton(
-          icon: Icons.redo,
-          label: 'Redo',
-          onPressed: controller.canRedo ? controller.redo : null,
-        ),
-        // One control for both: deletes the selection when there is one,
-        // otherwise clears everything, and says which by its label.
-        D3ToolButton(
-          icon: controller.selectedId != null
-              ? Icons.delete
-              : Icons.delete_outline,
-          label: controller.selectedId != null ? 'Delete' : 'Clear',
-          destructive: controller.selectedId != null,
-          onPressed: controller.isEmpty
-              ? null
-              : () {
-                  final id = controller.selectedId;
-                  if (id != null) {
-                    controller.remove(id);
-                  } else {
-                    controller.clear();
-                  }
-                },
         ),
       ],
     };
