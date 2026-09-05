@@ -115,10 +115,16 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
               transformationController: _transform,
               minScale: widget.minScale,
               maxScale: widget.maxScale,
-              // The overlay's recognizer yields the moment a second
-              // pointer lands, so leaving pan enabled here costs
-              // nothing and gives two-finger panning while zoomed in.
-              panEnabled: true,
+              // panEnabled MUST be false. It governs *single-finger*
+              // dragging, and InteractiveViewer wins the arena for
+              // those -- with it on, one-finger strokes are eaten as
+              // pans and nothing is ever drawn. Verified on-device:
+              // leaving it true produced no annotations at all.
+              //
+              // Two-finger panning is unaffected: scaleEnabled handles
+              // the scale gesture, which carries translation with it,
+              // so pinch-zoom and two-finger drag both still work.
+              panEnabled: false,
               scaleEnabled: true,
               child: content,
             )
