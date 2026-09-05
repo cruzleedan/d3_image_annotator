@@ -197,7 +197,14 @@ class _AnnotatorDemoState extends State<_AnnotatorDemo> {
   }
 }
 
-class _Toolbar extends StatelessWidget {
+/// Which set of tools the bar is showing.
+///
+/// Grouping keeps the row short enough to read at a glance rather than
+/// making the user scan a long undifferentiated list of icons -- the
+/// arrangement the Pixel camera uses.
+enum _ToolGroup { draw, transform, history }
+
+class _Toolbar extends StatefulWidget {
   const _Toolbar({
     required this.tool,
     required this.controller,
@@ -211,7 +218,15 @@ class _Toolbar extends StatelessWidget {
   final VoidCallback onStartCrop;
 
   @override
+  State<_Toolbar> createState() => _ToolbarState();
+}
+
+class _ToolbarState extends State<_Toolbar> {
+  _ToolGroup _group = _ToolGroup.draw;
+
+  @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
@@ -220,112 +235,105 @@ class _Toolbar extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 4),
-                child: Text(
-                  'One finger draws · two fingers pinch · select to edit',
-                  style: TextStyle(color: Colors.white54, fontSize: 12),
-                ),
-              ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  for (final t in AnnotationTool.values)
-                    IconButton(
-                      onPressed: () => onToolChanged(t),
-                      color: t == tool ? Colors.amber : Colors.white70,
-                      icon: Icon(switch (t) {
-                        AnnotationTool.select => Icons.touch_app,
-                        AnnotationTool.rectangle => Icons.crop_square,
-                        AnnotationTool.circle => Icons.circle_outlined,
-                        AnnotationTool.arrow => Icons.arrow_outward,
-                        AnnotationTool.freehand => Icons.gesture,
-                      }),
-                    ),
-                  IconButton(
-                    onPressed: controller.canUndo ? controller.undo : null,
-                    color: Colors.white70,
-                    disabledColor: Colors.white24,
-                    icon: const Icon(Icons.undo),
-                  ),
-                  IconButton(
-                    onPressed: controller.canRedo ? controller.redo : null,
-                    color: Colors.white70,
-                    disabledColor: Colors.white24,
-                    icon: const Icon(Icons.redo),
-                  ),
-                  // Deletes the selection when there is one, otherwise
-                  // clears everything -- so the same control serves both
-                  // without a second button competing for space.
-                  IconButton(
-                    tooltip: controller.selectedId != null
-                        ? 'Delete selected'
-                        : 'Clear all',
-                    onPressed: controller.isEmpty
-                        ? null
-                        : () {
-                            final id = controller.selectedId;
-                            if (id != null) {
-                              controller.remove(id);
-                            } else {
-                              controller.clear();
-                            }
-                          },
-                    color: controller.selectedId != null
-                        ? Colors.redAccent
-                        : Colors.white70,
-                    disabledColor: Colors.white24,
-                    icon: Icon(
-                      controller.selectedId != null
-                          ? Icons.delete
-                          : Icons.delete_outline,
-                    ),
-                  ),
-                ],
-              ),
-              // Transforms: non-destructive, so annotations follow the
-              // image and a crop can be undone.
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  IconButton(
-                    tooltip: 'Rotate',
-                    onPressed: controller.rotateClockwise,
-                    color: Colors.white70,
-                    icon: const Icon(Icons.rotate_90_degrees_cw),
-                  ),
-                  IconButton(
-                    tooltip: 'Mirror',
-                    onPressed: controller.toggleMirror,
-                    color: controller.transform.mirrored
-                        ? Colors.amber
-                        : Colors.white70,
-                    icon: const Icon(Icons.flip),
-                  ),
-                  IconButton(
-                    tooltip: 'Crop',
-                    onPressed: onStartCrop,
-                    color: controller.transform.cropRect != null
-                        ? Colors.amber
-                        : Colors.white70,
-                    icon: const Icon(Icons.crop),
-                  ),
-                  IconButton(
-                    tooltip: 'Reset transform',
-                    onPressed: controller.transform.isIdentity
-                        ? null
-                        : controller.resetTransform,
-                    color: Colors.white70,
-                    disabledColor: Colors.white24,
-                    icon: const Icon(Icons.crop_free),
-                  ),
-                ],
+              D3ToolBar(children: _toolsFor(_group)),
+              D3ToolGroupBar<_ToolGroup>(
+                groups: const {
+                  _ToolGroup.draw: 'Draw',
+                  _ToolGroup.transform: 'Adjust',
+                  _ToolGroup.history: 'Edit',
+                },
+                selected: _group,
+                onSelected: (g) => setState(() => _group = g),
               ),
             ],
           ),
         );
       },
     );
+  }
+
+  List<Widget> _toolsFor(_ToolGroup group) {
+    final controller = widget.controller;
+    return switch (group) {
+      _ToolGroup.draw => [
+        for (final t in AnnotationTool.values)
+          D3ToolButton(
+            icon: switch (t) {
+              AnnotationTool.select => Icons.touch_app,
+              AnnotationTool.rectangle => Icons.crop_square,
+              AnnotationTool.circle => Icons.circle_outlined,
+              AnnotationTool.arrow => Icons.arrow_outward,
+              AnnotationTool.freehand => Icons.gesture,
+            },
+            label: switch (t) {
+              AnnotationTool.select => 'Select',
+              AnnotationTool.rectangle => 'Box',
+              AnnotationTool.circle => 'Circle',
+              AnnotationTool.arrow => 'Arrow',
+              AnnotationTool.freehand => 'Draw',
+            },
+            selected: t == widget.tool,
+            onPressed: () => widget.onToolChanged(t),
+          ),
+      ],
+      _ToolGroup.transform => [
+        D3ToolButton(
+          icon: Icons.crop,
+          label: 'Crop',
+          selected: controller.transform.cropRect != null,
+          onPressed: widget.onStartCrop,
+        ),
+        D3ToolButton(
+          icon: Icons.rotate_90_degrees_cw,
+          label: 'Rotate',
+          onPressed: controller.rotateClockwise,
+        ),
+        D3ToolButton(
+          icon: Icons.flip,
+          label: 'Mirror',
+          selected: controller.transform.mirrored,
+          onPressed: controller.toggleMirror,
+        ),
+        D3ToolButton(
+          icon: Icons.crop_free,
+          label: 'Reset',
+          onPressed: controller.transform.isIdentity
+              ? null
+              : controller.resetTransform,
+        ),
+      ],
+      _ToolGroup.history => [
+        D3ToolButton(
+          icon: Icons.undo,
+          label: 'Undo',
+          onPressed: controller.canUndo ? controller.undo : null,
+        ),
+        D3ToolButton(
+          icon: Icons.redo,
+          label: 'Redo',
+          onPressed: controller.canRedo ? controller.redo : null,
+        ),
+        // One control for both: deletes the selection when there is one,
+        // otherwise clears everything, and says which by its label.
+        D3ToolButton(
+          icon: controller.selectedId != null
+              ? Icons.delete
+              : Icons.delete_outline,
+          label: controller.selectedId != null ? 'Delete' : 'Clear',
+          destructive: controller.selectedId != null,
+          onPressed: controller.isEmpty
+              ? null
+              : () {
+                  final id = controller.selectedId;
+                  if (id != null) {
+                    controller.remove(id);
+                  } else {
+                    controller.clear();
+                  }
+                },
+        ),
+      ],
+    };
   }
 }
 
