@@ -38,6 +38,7 @@ export 'src/geometry/image_fit.dart';
 export 'src/geometry/image_transform.dart';
 
 // Reusable toolbar controls with guaranteed touch targets
+export 'src/ui/annotator_screen.dart';
 export 'src/ui/tool_button.dart';
 
 // Viewer
