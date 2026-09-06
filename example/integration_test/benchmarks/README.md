@@ -26,6 +26,13 @@ nothing about a phone.
 | `codec_options_test.dart` | Would JPEG or a lower PNG level be better? | No to both. JPEG is 2× slower in pure Dart; level 3 is 24% larger |
 | `threshold_test.dart` | Where does the isolate stop paying for itself, on plain content? | Engine leads up to ~9MP on a flat gradient |
 | `threshold_realistic_test.dart` | Same question, on content shaped like what this package actually renders | Engine leads up to ~9MP here too; isolate only wins at full 12MP. Threshold set at 2000px — see below |
+| `reused_worker_test.dart` | Does a reused isolate worker beat `Isolate.run` per image, for a batch? | Yes, ~7–9% for a batch of ten. Modest, not dramatic — spawn cost measured at only 5–8 ms |
+
+`../batch_render_test.dart` (one level up, not in this directory since
+it exercises the public batch API rather than an internal choice)
+confirms two WORK-0031 device claims: progress genuinely advances across
+pumped frames rather than jumping straight to the end, and a batch of
+ten never holds more than one result at a time.
 
 ## Baseline, Pixel 10 (Android 17), 12MP source
 
@@ -69,6 +76,18 @@ between the measured points, so the two most common outcomes stay easy
 to reason about: the bounded default always encodes on the root
 isolate (faster there anyway), and asking for more always moves to the
 background isolate (faster there too, and where the jank was worst).
+
+## Reused worker: modest, not dramatic
+
+Four runs comparing `Isolate.run` per image against one worker sent N
+jobs over a `SendPort`, batch of ten, 12MP-content encode jobs: reused
+worker 4468–4565 ms, independent calls 4892–4894 ms (each series' first
+run discarded as JIT/cache warm-up — consistently the outlier in both).
+A ~7–9% win, not the "pays a spawn on every image" framing WORK-0031's
+Decision section originally worried about before this was measured;
+isolate spawn itself is only 5–8 ms here. Chosen anyway: never slower in
+any run, and it removes the concern from the design rather than leaving
+it as an accepted cost.
 
 ## The `image` dependency
 
