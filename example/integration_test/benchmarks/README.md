@@ -1,10 +1,17 @@
-# Render benchmarks
+# Device benchmarks
 
 Measurements, not assertions. These files record *how* the numbers in
-WORK-0027, WORK-0030 and WORK-0031 were obtained, so a later change can
-re-run them rather than trusting a figure in a document. They mostly
-print rather than assert — a benchmark that fails CI on a slower machine
-would be noise.
+WORK-0023, WORK-0027, WORK-0030 and WORK-0031 were obtained, so a later
+change can re-run them rather than trusting a figure in a document. They
+mostly print rather than assert — a benchmark that fails CI on a slower
+machine would be noise.
+
+Most of this directory is about the render pipeline (WORK-0027/0030/
+0031, below). `freehand_worst_case_test.dart` is a separate question —
+annotation paint/hit-test/serialisation cost — that happens to live
+alongside the render benchmarks rather than in its own directory,
+grouped here because it shares the "measure on device, don't guess"
+convention rather than any code with the rest of this folder.
 
 Run one against a connected device:
 
@@ -27,6 +34,7 @@ nothing about a phone.
 | `threshold_test.dart` | Where does the isolate stop paying for itself, on plain content? | Engine leads up to ~9MP on a flat gradient |
 | `threshold_realistic_test.dart` | Same question, on content shaped like what this package actually renders | Engine leads up to ~9MP here too; isolate only wins at full 12MP. Threshold set at 2000px — see below |
 | `reused_worker_test.dart` | Does a reused isolate worker beat `Isolate.run` per image, for a batch? | Yes, ~7–9% for a batch of ten. Modest, not dramatic — spawn cost measured at only 5–8 ms |
+| `freehand_worst_case_test.dart` | Does dense freehand markup cost anything worth simplifying for? | No. 1.3–3.5 ms paint and 190–930 µs hit-test from 8,000 to 40,000 points, both negligible against a frame budget — see below |
 
 `../batch_render_test.dart` (one level up, not in this directory since
 it exercises the public batch API rather than an internal choice)
@@ -88,6 +96,47 @@ Decision section originally worried about before this was measured;
 isolate spawn itself is only 5–8 ms here. Chosen anyway: never slower in
 any run, and it removes the concern from the design rather than leaving
 it as an accepted cost.
+
+## Freehand markup: measured negligible, don't simplify (WORK-0023)
+
+A worst-case page — 20 freehand strokes at 400 points each (8,000
+total, already past the "several thousand" this item's problem
+statement names) plus 15 other shapes — exercised the real
+`paintAnnotations` and `hitTestAnnotations` functions, not a
+reimplementation of their logic. Repeated at 5× the point count
+(40,000) to check for a nonlinearity the primary scale wouldn't reveal:
+
+| | 8,000 points | 40,000 points |
+|---|---|---|
+| paint (one full repaint) | 1.3–1.5 ms | 3.3–3.5 ms |
+| hit-test (a miss, the real worst case) | 190–240 µs | 830–930 µs |
+
+Roughly linear, and two orders of magnitude under a 16.7 ms frame
+budget even at 5×. **Simplifying stroke points (e.g. Ramer–Douglas–
+Peucker) would trade fidelity for a cost that isn't there.**
+
+Two things worth separating from that headline result:
+
+- **The problem statement's own premise was outdated.** It assumed raw
+  120Hz pointer sampling; `annotation_overlay_widget.dart` has applied
+  a minimum-step filter during drawing (`_freehandMinStep = 0.002`
+  normalized units) since the annotator's first commit, predating this
+  item. The real worst case is bounded by path length divided by that
+  step, not by how long a finger stays down.
+- **Serialisation is a different question with a different answer.**
+  The 8,000-point page encodes to 371.5 KB — 47.5 bytes/point, because
+  `annotation_codec.dart` encodes each point as `{"x":…,"y":…}` rather
+  than a flat array. A flat encoding would cut that by an estimated
+  ~42% with *zero* fidelity loss, unlike point simplification. Recorded
+  as a separate follow-up rather than folded in here, since it needs a
+  schema-version bump (WORK-0029) this item was never scoped to make.
+
+A bug was also found and fixed in the benchmark itself before it ever
+reached the device: the synthetic-stroke generator could clamp two
+coordinates at a boundary simultaneously, producing zero forward
+progress and hanging. Caught on the host VM; fixed with edge-reflection
+instead of clamping, plus a hard iteration cap so any future stall in
+the generator fails fast instead of hanging silently again.
 
 ## The `image` dependency
 
