@@ -42,7 +42,14 @@ export 'src/ui/annotator_screen.dart';
 export 'src/ui/tool_button.dart';
 
 // Rendering: flatten annotations into image bytes for output
-export 'src/render/render_annotated_image.dart';
+//
+// renderCompositedImage, PixelEncoder, and decodeSourceImage are hidden
+// -- they exist only so renderAnnotatedImages (below) can share a
+// worker isolate across a batch. A caller of this package should never
+// need them, and their contract is free to change without notice.
+export 'src/render/render_annotated_image.dart'
+    hide renderCompositedImage, PixelEncoder, decodeSourceImage;
+export 'src/render/render_annotated_images.dart';
 export 'src/render/render_options.dart';
 
 // Viewer

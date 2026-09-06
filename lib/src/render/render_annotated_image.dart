@@ -111,9 +111,9 @@ Future<Uint8List> renderAnnotatedImage({
   ImageTransform transform = ImageTransform.identity,
   RenderOptions options = const RenderOptions(),
 }) async {
-  final source = await _decodeSource(imageBytes);
+  final source = await decodeSourceImage(imageBytes);
   try {
-    return await _render(
+    return await renderCompositedImage(
       source: source,
       annotations: annotations,
       transform: transform,
@@ -126,11 +126,38 @@ Future<Uint8List> renderAnnotatedImage({
   }
 }
 
-Future<Uint8List> _render({
+/// A pluggable PNG encoder: raw RGBA bytes in, encoded bytes out.
+///
+/// Package-private and not exported. Its only reason to exist is
+/// `renderAnnotatedImages` sharing one background-isolate worker across
+/// a whole batch instead of spawning one per image (WORK-0031) — a
+/// batch-only concern that has no business on [renderAnnotatedImage]'s
+/// public signature. A caller of the single-image function should never
+/// need to know this parameter exists, which is why it lives on the
+/// internal [renderCompositedImage] instead.
+typedef PixelEncoder =
+    Future<Uint8List> Function({
+      required TransferableTypedData pixels,
+      required int width,
+      required int height,
+    });
+
+/// Composites [annotations] onto an already-decoded [source] and
+/// encodes the result.
+///
+/// Package-private: this is [renderAnnotatedImage]'s implementation,
+/// split out so `renderAnnotatedImages` can reuse it starting from a
+/// source it already holds decoded, and so it can pass [encoder] to
+/// share one worker isolate across a batch rather than spawning one per
+/// image. A caller outside this package should use
+/// [renderAnnotatedImage] or `renderAnnotatedImages`; this function's
+/// contract can change without notice.
+Future<Uint8List> renderCompositedImage({
   required ui.Image source,
   required List<Annotation> annotations,
   required ImageTransform transform,
   required RenderOptions options,
+  PixelEncoder? encoder,
 }) async {
   final sourceSize = Size(source.width.toDouble(), source.height.toDouble());
 
@@ -159,7 +186,7 @@ Future<Uint8List> _render({
       output.height.round(),
     );
     try {
-      return await _encode(rendered, options);
+      return await _encode(rendered, options, encoder);
     } finally {
       rendered.dispose();
     }
@@ -225,12 +252,16 @@ Size _scaleToFit(Size size, int? maxDimension) {
   return Size(size.width * scale, size.height * scale);
 }
 
-Future<Uint8List> _encode(ui.Image image, RenderOptions options) async {
+Future<Uint8List> _encode(
+  ui.Image image,
+  RenderOptions options,
+  PixelEncoder? encoder,
+) async {
   switch (options.format) {
     case RenderFormat.png:
       final longestSide = math.max(image.width, image.height);
       return longestSide >= kAsyncEncodeThresholdPixels
-          ? await _encodePngOffIsolate(image)
+          ? await _encodePngOffIsolate(image, encoder)
           : await _encodePngOnRootIsolate(image);
   }
 }
@@ -256,7 +287,16 @@ Future<Uint8List> _encodePngOnRootIsolate(ui.Image image) async {
 /// 18–20 ms to transfer against 33–36 ms to copy, for a 12MP source
 /// (WORK-0030). Transferring also means the buffer is never held twice
 /// at once.
-Future<Uint8List> _encodePngOffIsolate(ui.Image image) async {
+///
+/// If [encoder] is given, the buffer goes to it instead of a one-shot
+/// isolate -- this is how `renderAnnotatedImages` shares one worker
+/// across a whole batch (WORK-0031) rather than paying a fresh
+/// `Isolate.run` spawn per image. [renderAnnotatedImage] never passes
+/// one, so its behaviour here is unchanged from before batching existed.
+Future<Uint8List> _encodePngOffIsolate(
+  ui.Image image,
+  PixelEncoder? encoder,
+) async {
   final raw = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
   if (raw == null) {
     throw const RenderException('failed to extract pixels for encoding');
@@ -266,6 +306,10 @@ Future<Uint8List> _encodePngOffIsolate(ui.Image image) async {
   ]);
   final width = image.width;
   final height = image.height;
+
+  if (encoder != null) {
+    return encoder(pixels: transferable, width: width, height: height);
+  }
 
   return Isolate.run(() {
     final pixels = transferable.materialize().asUint8List();
@@ -279,7 +323,15 @@ Future<Uint8List> _encodePngOffIsolate(ui.Image image) async {
   });
 }
 
-Future<ui.Image> _decodeSource(Uint8List bytes) async {
+/// Decodes [bytes] to a [ui.Image], throwing [RenderException] rather
+/// than a bare decoder error.
+///
+/// Package-private but shared with `renderAnnotatedImages` (WORK-0031),
+/// which needs to decode each request's source itself before calling
+/// [renderCompositedImage] -- the same decode step
+/// [renderAnnotatedImage] uses, so a bad image fails the same way in
+/// both the single-image and batch paths.
+Future<ui.Image> decodeSourceImage(Uint8List bytes) async {
   try {
     final codec = await ui.instantiateImageCodec(bytes);
     try {
