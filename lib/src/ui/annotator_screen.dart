@@ -293,14 +293,12 @@ class _BottomBars extends StatelessWidget {
       for (final t in AnnotationTool.values)
         D3ToolButton(
           icon: switch (t) {
-            AnnotationTool.select => Icons.touch_app,
             AnnotationTool.rectangle => Icons.crop_square,
             AnnotationTool.circle => Icons.circle_outlined,
             AnnotationTool.arrow => Icons.arrow_outward,
             AnnotationTool.freehand => Icons.gesture,
           },
           label: switch (t) {
-            AnnotationTool.select => 'Select',
             AnnotationTool.rectangle => 'Box',
             AnnotationTool.circle => 'Circle',
             AnnotationTool.arrow => 'Arrow',
