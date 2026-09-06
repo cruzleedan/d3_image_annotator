@@ -163,15 +163,22 @@ Map<String, Object?> annotationToJson(Annotation annotation) {
     'style': _styleToJson(annotation.style),
   };
   return switch (annotation) {
-    RectangleAnnotation(:final rect) => {
+    RectangleAnnotation(:final rect, :final rotation) => {
       ...base,
       'type': 'rectangle',
       'rect': _rectToJson(rect),
+      // Omitted when zero rather than written as 0.0: keeps documents
+      // written before rotation existed byte-for-byte comparable to
+      // ones written since, for the overwhelmingly common unrotated
+      // case, and costs nothing on decode -- a missing key already
+      // means "no rotation" (WORK-0033).
+      if (rotation != 0.0) 'rotation': rotation,
     },
-    CircleAnnotation(:final rect) => {
+    CircleAnnotation(:final rect, :final rotation) => {
       ...base,
       'type': 'circle',
       'rect': _rectToJson(rect),
+      if (rotation != 0.0) 'rotation': rotation,
     },
     ArrowAnnotation(:final start, :final end) => {
       ...base,
@@ -209,12 +216,14 @@ Annotation annotationFromJson(Map<String, Object?> json) {
         id: id,
         style: style,
         rect: _rectFromJson(_asMap(json['rect'], 'rect')),
+        rotation: _rotationFromJson(json['rotation']),
       );
     case 'circle':
       return CircleAnnotation(
         id: id,
         style: style,
         rect: _rectFromJson(_asMap(json['rect'], 'rect')),
+        rotation: _rotationFromJson(json['rotation']),
       );
     case 'arrow':
       return ArrowAnnotation(
@@ -311,4 +320,18 @@ Map<String, Object?> _asMap(Object? value, String what) {
   if (value is Map<String, Object?>) return value;
   if (value is Map) return value.cast<String, Object?>();
   throw AnnotationDecodeException('$what must be a JSON object');
+}
+
+/// Decodes an optional `rotation` field, defaulting to `0.0`.
+///
+/// A missing key -- a document written before WORK-0033, or the
+/// deliberately-omitted zero case in `annotationToJson` -- means "no
+/// rotation", not an error: this is what makes the field backward- and
+/// forward-compatible without a schema-version bump. A present-but-
+/// wrong-typed value is still a loud decode failure, matching how
+/// every other field in this file behaves.
+double _rotationFromJson(Object? value) {
+  if (value == null) return 0.0;
+  if (value is num) return value.toDouble();
+  throw const AnnotationDecodeException('"rotation" must be a number');
 }

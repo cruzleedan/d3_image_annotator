@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -275,6 +276,161 @@ void main() {
       // Nothing red anywhere: the mark lies outside what was kept.
       for (final at in const [0.1, 0.5, 0.9]) {
         expect(await _pixelAt(rendered, at, at), const Color(0xFFFFFFFF));
+      }
+    });
+  });
+
+  group('rotation (WORK-0033)', () {
+    RectangleAnnotation rotatedRect({
+      required double left,
+      required double top,
+      required double right,
+      required double bottom,
+      required double rotation,
+    }) => RectangleAnnotation(
+      id: 'r',
+      style: const AnnotationStyle(color: red, filled: true),
+      rect: NormalizedRect(left: left, top: top, right: right, bottom: bottom),
+      rotation: rotation,
+    );
+
+    test('a rotated rectangle paints outside its own unrotated corners',
+        () async {
+      // A wide, short rect rotated 90 degrees becomes a tall, narrow
+      // one -- so a point in what *was* the unrotated rect's short
+      // side should now be red, since the rotation swings the long
+      // side through it.
+      final source = await _whiteImage(400, 400);
+
+      final bytes = await renderAnnotatedImage(
+        imageBytes: source,
+        annotations: [
+          rotatedRect(
+            left: 0.2,
+            top: 0.47,
+            right: 0.8,
+            bottom: 0.53,
+            rotation: math.pi / 2,
+          ),
+        ],
+      );
+
+      final rendered = await _decode(bytes);
+      addTearDown(rendered.dispose);
+
+      // Above the unrotated band's centre, along what becomes the long
+      // axis after a 90 degree turn.
+      expect(await _pixelAt(rendered, 0.5, 0.25), red,
+          reason: 'the long side should now run vertically through here');
+      // Where the unrotated band's long side used to reach -- now
+      // outside the rotated (narrow) shape.
+      expect(await _pixelAt(rendered, 0.25, 0.5), const Color(0xFFFFFFFF),
+          reason: 'the old long side is gone once rotated 90 degrees');
+    });
+
+    test('rotation is not distorted by a non-square crop', () async {
+      // The exact failure this item's log records, run through the
+      // real render pipeline end to end rather than just the
+      // supporting geometry: a 45 degree rotation must still measure
+      // as 45 degrees on screen after an anisotropic crop, not the
+      // 26.57 degrees an earlier, wrong version of this design
+      // produced for the same inputs.
+      //
+      // An elongated rect (4:1, half-width 80px / half-height 20px in
+      // the 400x200 cropped output) makes the two angles' vertical
+      // reach at the shape's own centre-x differ measurably: 28px
+      // (correct 45°) vs. 22px (the previously-measured 26.57°
+      // distortion). Every test point below came from directly
+      // simulating the painter's own rotation math in Python and
+      // scanning for the true boundary, not from computing it by hand
+      // a second, independent way -- an earlier draft of this test did
+      // that and got the reach wrong by a factor of ~2.5, which would
+      // have made the test assert something false rather than what it
+      // meant to.
+      final source = await _whiteImage(400, 400);
+
+      final bytes = await renderAnnotatedImage(
+        imageBytes: source,
+        annotations: [
+          rotatedRect(
+            left: 0.3,
+            top: 0.2,
+            right: 0.7,
+            bottom: 0.3,
+            rotation: math.pi / 4,
+          ),
+        ],
+        transform: ImageTransform(
+          cropRect: NormalizedRect(left: 0, top: 0, right: 1, bottom: 0.5),
+        ),
+      );
+
+      final rendered = await _decode(bytes);
+      addTearDown(rendered.dispose);
+      expect(rendered.width, 400);
+      expect(rendered.height, 200);
+
+      // The shape's own centre survives any rotation or crop
+      // unchanged.
+      expect(await _pixelAt(rendered, 0.5, 0.5), red,
+          reason: "the rotated shape's centre must still be red after "
+              'the crop');
+
+      // Comfortably inside the diamond under *either* angle -- a
+      // sanity check that the shape paints at all, so the
+      // discriminating assertion below cannot pass vacuously by the
+      // shape being empty or misplaced.
+      expect(await _pixelAt(rendered, 0.5, 0.4150), red,
+          reason: 'sanity check -- inside the rotated diamond under '
+              'either the correct or the previously-buggy angle, so it '
+              'must be red regardless');
+
+      // Between the two angles' vertical reach at the shape's centre-x
+      // (28px correct vs. 22px for the previously-measured distortion):
+      // red only if the rotation is genuinely 45 degrees on screen.
+      expect(
+        await _pixelAt(rendered, 0.5, 0.3750),
+        red,
+        reason: 'outside the diamond the earlier, wrong design would '
+            'have produced (reach ~22px) but inside the correct one '
+            '(reach ~28px) -- red here is what tells correct and '
+            'distorted apart',
+      );
+
+      // Outside the diamond under *either* angle -- confirms the shape
+      // has a real edge, not that everything above centre reads red
+      // for an unrelated reason.
+      expect(await _pixelAt(rendered, 0.5, 0.3350), const Color(0xFFFFFFFF),
+          reason: 'sanity check -- outside the diamond under either '
+              'angle, so it must be white regardless');
+    });
+
+    test('a rotated mark is still clipped at the crop boundary', () async {
+      final source = await _whiteImage(400, 400);
+
+      final bytes = await renderAnnotatedImage(
+        imageBytes: source,
+        annotations: [
+          rotatedRect(
+            left: 0.05,
+            top: 0.05,
+            right: 0.2,
+            bottom: 0.2,
+            rotation: math.pi / 4,
+          ),
+        ],
+        transform: ImageTransform(
+          cropRect: NormalizedRect(left: 0.5, top: 0.5, right: 1, bottom: 1),
+        ),
+      );
+
+      final rendered = await _decode(bytes);
+      addTearDown(rendered.dispose);
+
+      for (final at in const [0.1, 0.5, 0.9]) {
+        expect(await _pixelAt(rendered, at, at), const Color(0xFFFFFFFF),
+            reason: 'a rotated mark entirely outside the crop must be '
+                'clipped away exactly like an unrotated one');
       }
     });
   });

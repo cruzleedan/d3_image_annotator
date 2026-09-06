@@ -78,10 +78,20 @@ void paintAnnotations(
     // teaching this switch about it is a compile error, not a silently
     // invisible annotation.
     switch (annotation) {
-      case RectangleAnnotation(:final rect):
-        canvas.drawRect(_mapRect(rect, contentRect, transform), paint);
-      case CircleAnnotation(:final rect):
-        canvas.drawOval(_mapRect(rect, contentRect, transform), paint);
+      case RectangleAnnotation(:final rect, :final rotation):
+        _drawRotated(
+          canvas,
+          _mapRect(rect, contentRect, transform),
+          rotation,
+          (r) => canvas.drawRect(r, paint),
+        );
+      case CircleAnnotation(:final rect, :final rotation):
+        _drawRotated(
+          canvas,
+          _mapRect(rect, contentRect, transform),
+          rotation,
+          (r) => canvas.drawOval(r, paint),
+        );
       case ArrowAnnotation(:final start, :final end):
         _paintArrow(
           canvas,
@@ -146,6 +156,47 @@ Rect _mapRect(
     transform,
   );
   return Rect.fromPoints(a, b);
+}
+
+/// Draws [mapped] via [draw], rotated by [rotationRadians] about its own
+/// centre (WORK-0033).
+///
+/// **Rotation happens here, in already-mapped pixel space -- never
+/// applied to the normalized rect before mapping.** An earlier version
+/// of this design rotated the shape's corners in normalized space and
+/// let the existing crop/mirror/quarterTurn pipeline carry them
+/// through, on the reasoning that it already handles every other
+/// coordinate that way. That is wrong whenever a crop keeps a
+/// non-square region: `ImageTransform.mapPoint`'s crop step scales x
+/// and y independently, so a 45° rotation applied beforehand can come
+/// out as a visually different angle after an anisotropic crop --
+/// confirmed numerically (45° measured as 26.57° after a 2:1-aspect
+/// crop) before this was written, not assumed safe. The mapping from
+/// `mapPoint`'s output to widget pixels is isotropic by construction
+/// (`contentRect`'s aspect always matches `ImageTransform.resultSize`'s
+/// -- what already makes the unrotated case correct), so rotating after
+/// that mapping, not before it, is the one place in the pipeline where
+/// applying an angle cannot be distorted by crop.
+void _drawRotated(
+  Canvas canvas,
+  Rect mapped,
+  double rotationRadians,
+  void Function(Rect) draw,
+) {
+  if (rotationRadians == 0.0) {
+    draw(mapped);
+    return;
+  }
+  final center = mapped.center;
+  canvas.save();
+  canvas.translate(center.dx, center.dy);
+  canvas.rotate(rotationRadians);
+  draw(Rect.fromCenter(
+    center: Offset.zero,
+    width: mapped.width,
+    height: mapped.height,
+  ));
+  canvas.restore();
 }
 
 void _paintArrow(Canvas canvas, Offset start, Offset end, Paint paint) {

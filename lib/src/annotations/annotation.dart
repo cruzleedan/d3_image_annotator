@@ -40,19 +40,32 @@ final class RectangleAnnotation extends Annotation {
     required super.id,
     required super.style,
     required this.rect,
+    this.rotation = 0.0,
   });
 
   final NormalizedRect rect;
+
+  /// Radians, clockwise-positive, relative to the image's own upright
+  /// orientation -- not the screen, and not
+  /// `ImageTransform.quarterTurns`/mirroring, which are applied to the
+  /// painted result separately (WORK-0033). Matches `Canvas.rotate()`'s
+  /// own convention, so no unit conversion is needed at paint time.
+  final double rotation;
 
   @override
   NormalizedRect get bounds => rect;
 
   @override
   RectangleAnnotation copyWithStyle(AnnotationStyle style) =>
-      RectangleAnnotation(id: id, style: style, rect: rect);
+      RectangleAnnotation(id: id, style: style, rect: rect, rotation: rotation);
 
-  RectangleAnnotation copyWith({NormalizedRect? rect}) =>
-      RectangleAnnotation(id: id, style: style, rect: rect ?? this.rect);
+  RectangleAnnotation copyWith({NormalizedRect? rect, double? rotation}) =>
+      RectangleAnnotation(
+        id: id,
+        style: style,
+        rect: rect ?? this.rect,
+        rotation: rotation ?? this.rotation,
+      );
 
   @override
   bool operator ==(Object other) =>
@@ -61,13 +74,14 @@ final class RectangleAnnotation extends Annotation {
           runtimeType == other.runtimeType &&
           id == other.id &&
           style == other.style &&
-          rect == other.rect;
+          rect == other.rect &&
+          rotation == other.rotation;
 
   @override
-  int get hashCode => Object.hash(id, style, rect);
+  int get hashCode => Object.hash(id, style, rect, rotation);
 
   @override
-  String toString() => 'RectangleAnnotation($id, $rect)';
+  String toString() => 'RectangleAnnotation($id, $rect, rotation: $rotation)';
 }
 
 /// An ellipse inscribed in [rect]. Named "circle" for the user-facing
@@ -78,19 +92,28 @@ final class CircleAnnotation extends Annotation {
     required super.id,
     required super.style,
     required this.rect,
+    this.rotation = 0.0,
   });
 
   final NormalizedRect rect;
+
+  /// See [RectangleAnnotation.rotation] -- same convention.
+  final double rotation;
 
   @override
   NormalizedRect get bounds => rect;
 
   @override
   CircleAnnotation copyWithStyle(AnnotationStyle style) =>
-      CircleAnnotation(id: id, style: style, rect: rect);
+      CircleAnnotation(id: id, style: style, rect: rect, rotation: rotation);
 
-  CircleAnnotation copyWith({NormalizedRect? rect}) =>
-      CircleAnnotation(id: id, style: style, rect: rect ?? this.rect);
+  CircleAnnotation copyWith({NormalizedRect? rect, double? rotation}) =>
+      CircleAnnotation(
+        id: id,
+        style: style,
+        rect: rect ?? this.rect,
+        rotation: rotation ?? this.rotation,
+      );
 
   @override
   bool operator ==(Object other) =>
@@ -99,13 +122,14 @@ final class CircleAnnotation extends Annotation {
           runtimeType == other.runtimeType &&
           id == other.id &&
           style == other.style &&
-          rect == other.rect;
+          rect == other.rect &&
+          rotation == other.rotation;
 
   @override
-  int get hashCode => Object.hash(id, style, rect);
+  int get hashCode => Object.hash(id, style, rect, rotation);
 
   @override
-  String toString() => 'CircleAnnotation($id, $rect)';
+  String toString() => 'CircleAnnotation($id, $rect, rotation: $rotation)';
 }
 
 /// A directional arrow from [start] to [end]. Direction is part of the
