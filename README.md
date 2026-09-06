@@ -134,6 +134,39 @@ Building something different? `D3ImageAnnotator` is the bare viewer, and
 `D3ToolButton`, `D3ToolBar`, `D3ToolGroupBar`, `D3HistoryBar` and
 `D3CloseButton` are exported individually.
 
+## Rendering for output
+
+Annotations stay data until something needs pixels — a PDF, an
+attachment, a share sheet. `renderAnnotatedImage` flattens them on
+demand and returns bytes; it writes nothing and never touches the
+source, so the marks remain editable afterwards.
+
+```dart
+final png = await renderAnnotatedImage(
+  imageBytes: await File(path).readAsBytes(),
+  annotations: controller.annotations,
+  transform: controller.transform,
+);
+```
+
+Compositing goes through the same `paintAnnotations` the live overlay
+uses, so what you saw is what you get — including marks clipped at a
+crop boundary.
+
+Two things worth knowing:
+
+- **Output is bounded by default** (2000px longest side). Unbounded
+  full-resolution copies caused real memory trouble in practice, and a
+  report attachment rarely needs 12 megapixels. Pass
+  `RenderOptions(maxDimension: null)` to opt into the original.
+- **It takes bytes, not an `ImageProvider`.** A provider resolves
+  through Flutter's binding and only makes progress while frames are
+  pumped, so awaiting one from a background task hangs. Bytes have no
+  such dependency.
+
+PNG only for now: Flutter's `toByteData` has no JPEG encoder, and
+returning PNG bytes under a JPEG name would be worse than saying so.
+
 ## Composing your own UI
 
 `D3ImageAnnotator` is a convenience. The overlay works standalone over
