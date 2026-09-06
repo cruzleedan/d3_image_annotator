@@ -147,7 +147,24 @@ class _D3AnnotatorScreenState extends State<D3AnnotatorScreen> {
                   }),
                 ),
               )
-            else
+            else ...[
+              AnimatedBuilder(
+                animation: widget.controller,
+                builder: (context, _) {
+                  final selected = widget.controller.selected;
+                  // Only while something is selected -- restyling a
+                  // shape that does not exist yet has no meaning, and
+                  // showing this bar the rest of the time would leave it
+                  // permanently visible but permanently useless.
+                  if (selected == null) return const SizedBox.shrink();
+                  return _ControlSurface(
+                    child: D3RestyleBar(
+                      controller: widget.controller,
+                      selected: selected,
+                    ),
+                  );
+                },
+              ),
               _ControlSurface(
                 child: _BottomBars(
                   controller: widget.controller,
@@ -161,6 +178,7 @@ class _D3AnnotatorScreenState extends State<D3AnnotatorScreen> {
                   }),
                 ),
               ),
+            ],
           ],
         ),
       ),

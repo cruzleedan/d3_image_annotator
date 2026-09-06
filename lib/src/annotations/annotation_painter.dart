@@ -111,6 +111,7 @@ void paintAnnotations(
       _paintSelection(
         canvas,
         mapRectToPixels(annotation.bounds, contentRect, transform),
+        rotationOf(annotation),
         paint,
       );
       _paintHandles(canvas, annotation, contentRect, transform);
@@ -247,28 +248,50 @@ void _paintHandles(
     ..color = const Color(0xDD000000)
     ..strokeWidth = 1.5
     ..style = PaintingStyle.stroke;
+  // Distinct fill so the rotation handle reads as "does something
+  // different" at a glance, not just another resize dot in a new spot
+  // (WORK-0035).
+  final rotateFill = Paint()..color = const Color(0xFF4A90D9);
 
-  for (final point in gripsOf(annotation).values) {
-    final at = mapPointToPixels(point, contentRect, transform);
-    canvas.drawCircle(at, kHandleRadius, fill);
-    canvas.drawCircle(at, kHandleRadius, edge);
-  }
+  gripPositionsInPixels(annotation, contentRect, transform).forEach((
+    grip,
+    at,
+  ) {
+    if (grip == AnnotationGrip.rotate) {
+      canvas.drawCircle(at, kHandleRadius, rotateFill);
+      canvas.drawCircle(at, kHandleRadius, edge);
+    } else {
+      canvas.drawCircle(at, kHandleRadius, fill);
+      canvas.drawCircle(at, kHandleRadius, edge);
+    }
+  });
 }
 
-void _paintSelection(Canvas canvas, Rect bounds, Paint source) {
+void _paintSelection(
+  Canvas canvas,
+  Rect bounds,
+  double rotationRadians,
+  Paint source,
+) {
   final handle = Paint()
     ..color = source.color.withValues(alpha: 0.9)
     ..strokeWidth = source.strokeWidth * 0.6
     ..style = PaintingStyle.stroke;
 
   final inflated = bounds.inflate(source.strokeWidth * 2);
-  _paintDashedRect(canvas, inflated, handle);
+  // Inflate first, in the shape's own unrotated frame, then rotate the
+  // inflated corners -- inflating an already-rotated quadrilateral by a
+  // uniform pixel amount is not the same shape as a rotated, uniformly
+  // -inflated rectangle, and the latter is what "the outline sits a
+  // constant distance outside the shape at every angle" actually means.
+  final corners = rotatedCorners(inflated, rotationRadians);
+  _paintDashedPolygon(canvas, corners, handle);
 }
 
-void _paintDashedRect(Canvas canvas, Rect rect, Paint paint) {
+void _paintDashedPolygon(Canvas canvas, List<Offset> corners, Paint paint) {
   const dash = 8.0;
   const gap = 5.0;
-  final path = Path()..addRect(rect);
+  final path = Path()..addPolygon(corners, true);
   for (final PathMetric metric in path.computeMetrics()) {
     var distance = 0.0;
     while (distance < metric.length) {

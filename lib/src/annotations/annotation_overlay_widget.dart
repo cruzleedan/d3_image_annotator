@@ -6,6 +6,7 @@ import '../coordinates/normalized_rect.dart';
 import '../geometry/image_fit.dart';
 import '../geometry/image_transform.dart';
 import '../geometry/content_rect.dart';
+import '../ui/tool_button.dart';
 import 'annotation.dart';
 import 'annotation_controller.dart';
 import 'annotation_handles.dart';
@@ -238,7 +239,7 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     // _onPanStart's priority: if this gesture grabbed a shape or a
     // handle, it continues doing that regardless of the active tool.
     if (_movingId != null) {
-      _dragSelection(point);
+      _dragSelection(point, _toImageSpace(localRaw), contentRect);
       return;
     }
 
@@ -262,7 +263,11 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     });
   }
 
-  void _dragSelection(NormalizedPoint point) {
+  void _dragSelection(
+    NormalizedPoint point,
+    Offset pixelPosition,
+    Rect contentRect,
+  ) {
     final id = _movingId;
     final original = _movingOriginal;
     if (id == null || original == null) return;
@@ -273,7 +278,30 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
       // origin: each update sets the grabbed corner to where the finger
       // is, so the shape tracks it exactly rather than accumulating.
       final current = widget.controller.selected ?? original;
-      final resized = resizeAnnotation(current, grip, point);
+
+      if (grip == AnnotationGrip.rotate) {
+        final rotated = rotateAnnotation(
+          current,
+          pixelPosition,
+          contentRect,
+          widget.imageTransform,
+        );
+        if (rotated != null) widget.controller.update(id, rotated);
+        return;
+      }
+
+      // Corner-drag resizes along the shape's own tilted axes (WORK
+      // -0035): the drag point is converted to where it would land on
+      // the shape's *unrotated* equivalent before `_resizeRect`'s
+      // rotation-oblivious math runs, the mirror image of how
+      // hit-testing already treats a rotated shape.
+      final unrotatedPoint = unrotatedEquivalentPoint(
+        current,
+        pixelPosition,
+        contentRect,
+        widget.imageTransform,
+      );
+      final resized = resizeAnnotation(current, grip, unrotatedPoint);
       if (resized != null) widget.controller.update(id, resized);
       return;
     }
@@ -318,6 +346,17 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     widget.controller.add(_withId(draft, _nextId()));
   }
 
+  void _deleteSelected() {
+    final id = widget.controller.selectedId;
+    if (id != null) widget.controller.remove(id);
+  }
+
+  void _duplicateSelected() {
+    if (widget.controller.selectedId != null) {
+      widget.controller.duplicateSelected(_nextId());
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -342,42 +381,71 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
             // onScale* reports pointerCount, so a single detector can
             // route one finger to drawing and two to zoom without any
             // arena contention at all.
-            return GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onScaleStart: (d) {
-                if (d.pointerCount > 1) {
-                  _abandonDraft();
-                  widget.onScaleStart?.call(d);
-                } else {
-                  _onPanStart(d.localFocalPoint, contentRect);
-                }
-              },
-              onScaleUpdate: (d) {
-                if (d.pointerCount > 1) {
-                  // A pinch may begin as one finger; drop any stroke it
-                  // started before the second landed.
-                  _abandonDraft();
-                  widget.onScaleUpdate?.call(d);
-                } else if (_draft != null || _movingId != null) {
-                  _onPanUpdate(d.localFocalPoint, contentRect);
-                }
-              },
-              onScaleEnd: (d) {
-                widget.onScaleEnd?.call(d);
-                _onPanEnd();
-              },
-              child: _MaybeTransformed(
-                transform: widget.transform,
-                child: CustomPaint(
-                  size: widgetSize,
-                  painter: AnnotationPainter(
-                    annotations: [...widget.controller.annotations, ?draft],
-                    contentRect: contentRect,
-                    selectedId: widget.controller.selectedId,
-                    transform: widget.imageTransform,
+            final selected = draft == null ? widget.controller.selected : null;
+
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onScaleStart: (d) {
+                    if (d.pointerCount > 1) {
+                      _abandonDraft();
+                      widget.onScaleStart?.call(d);
+                    } else {
+                      _onPanStart(d.localFocalPoint, contentRect);
+                    }
+                  },
+                  onScaleUpdate: (d) {
+                    if (d.pointerCount > 1) {
+                      // A pinch may begin as one finger; drop any stroke
+                      // it started before the second landed.
+                      _abandonDraft();
+                      widget.onScaleUpdate?.call(d);
+                    } else if (_draft != null || _movingId != null) {
+                      _onPanUpdate(d.localFocalPoint, contentRect);
+                    }
+                  },
+                  onScaleEnd: (d) {
+                    widget.onScaleEnd?.call(d);
+                    _onPanEnd();
+                  },
+                  child: _MaybeTransformed(
+                    transform: widget.transform,
+                    child: CustomPaint(
+                      size: widgetSize,
+                      painter: AnnotationPainter(
+                        annotations: [
+                          ...widget.controller.annotations,
+                          ?draft,
+                        ],
+                        contentRect: contentRect,
+                        selectedId: widget.controller.selectedId,
+                        transform: widget.imageTransform,
+                      ),
+                    ),
                   ),
                 ),
-              ),
+                // Deliberately a sibling of the GestureDetector above,
+                // not a descendant of it (WORK-0035): an InkWell nested
+                // inside the pan/scale GestureDetector would have to win
+                // a gesture-arena contest against onScaleStart on every
+                // tap, the exact kind of arena contention this file's
+                // other comments document as unwinnable reliably. As a
+                // sibling painted after it, its own hit-tests happen
+                // first and never enter that arena at all.
+                if (selected != null)
+                  _MaybeTransformed(
+                    transform: widget.transform,
+                    child: _FloatingShapeControls(
+                      annotation: selected,
+                      contentRect: contentRect,
+                      transform: widget.imageTransform,
+                      onDelete: _deleteSelected,
+                      onDuplicate: _duplicateSelected,
+                    ),
+                  ),
+              ],
             );
           },
         );
@@ -445,5 +513,70 @@ class _MaybeTransformed extends StatelessWidget {
     final matrix = transform;
     if (matrix == null) return child;
     return Transform(transform: matrix, child: child);
+  }
+}
+
+/// Floating delete (×) and duplicate (+1) controls anchored to the
+/// selected shape (WORK-0035).
+///
+/// A non-interactive [IgnorePointer]-free `Stack` positioned by
+/// [floatingControlAnchors] -- the only two hit-testable widgets here
+/// are the two [D3FloatingButton]s themselves, so the rest of this
+/// widget's bounds (it fills the whole overlay, like its sibling
+/// `CustomPaint`) let taps fall through to the `GestureDetector`
+/// beneath whenever neither button is under the finger.
+class _FloatingShapeControls extends StatelessWidget {
+  const _FloatingShapeControls({
+    required this.annotation,
+    required this.contentRect,
+    required this.transform,
+    required this.onDelete,
+    required this.onDuplicate,
+  });
+
+  final Annotation annotation;
+  final Rect contentRect;
+  final ImageTransform transform;
+  final VoidCallback onDelete;
+  final VoidCallback onDuplicate;
+
+  @override
+  Widget build(BuildContext context) {
+    final anchors = floatingControlAnchors(annotation, contentRect, transform);
+    final deleteAnchor = anchors[0];
+    final duplicateAnchor = anchors[1];
+
+    // Transparency: this widget supplies its own Material so a host
+    // embedding a bare AnnotationOverlay (as the widget tests do) is
+    // not required to wrap it in one just for these two InkWells --
+    // D3AnnotatorScreen already provides one for its own bars, but
+    // AnnotationOverlay is documented as composable on its own.
+    return Material(
+      type: MaterialType.transparency,
+      child: Stack(
+        children: [
+          Positioned(
+            left: deleteAnchor.dx - kMinimumTouchTarget / 2,
+            top: deleteAnchor.dy - kMinimumTouchTarget / 2,
+            child: D3FloatingButton(
+              icon: Icons.close,
+              tooltip: 'Delete',
+              color: Colors.redAccent,
+              onPressed: onDelete,
+            ),
+          ),
+          Positioned(
+            left: duplicateAnchor.dx - kMinimumTouchTarget / 2,
+            top: duplicateAnchor.dy - kMinimumTouchTarget / 2,
+            child: D3FloatingButton(
+              icon: Icons.add_box_outlined,
+              tooltip: 'Duplicate',
+              color: Colors.white,
+              onPressed: onDuplicate,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

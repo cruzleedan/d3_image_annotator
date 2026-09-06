@@ -243,25 +243,26 @@ void main() {
       expect(controller.annotations, isEmpty);
     });
 
-    testWidgets('the delete control removes only the selection', (
-      tester,
-    ) async {
-      // Same button, different meaning -- so the icon changes with it
-      // rather than leaving the user to guess which it will do.
-      final controller = await pumpHistory(tester);
-      controller.add(mark('a'));
-      controller.add(mark('b'));
-      controller.select('a');
-      await tester.pumpAndSettle();
+    testWidgets(
+      'the delete control is disabled while something is selected '
+      '(WORK-0035: the floating x owns that case instead)',
+      (tester) async {
+        final controller = await pumpHistory(tester);
+        controller.add(mark('a'));
+        controller.add(mark('b'));
+        controller.select('a');
+        await tester.pumpAndSettle();
 
-      expect(find.byIcon(Icons.delete), findsOneWidget,
-          reason: 'a filled icon signals it will delete the selection');
+        final delete = tester.getSemantics(find.byIcon(Icons.delete_outline));
+        expect(delete.flagsCollection.isEnabled.name, 'isFalse');
 
-      await tester.tap(find.byIcon(Icons.delete));
-      await tester.pumpAndSettle();
+        await tester.tap(find.byIcon(Icons.delete_outline), warnIfMissed: false);
+        await tester.pumpAndSettle();
 
-      expect(controller.annotations.map((x) => x.id), ['b']);
-    });
+        expect(controller.annotations, hasLength(2),
+            reason: 'disabled, so tapping it must do nothing');
+      },
+    );
 
     testWidgets('history controls meet the touch minimum', (tester) async {
       final controller = await pumpHistory(tester);
@@ -277,6 +278,128 @@ void main() {
         expect(size.width, greaterThanOrEqualTo(kMinimumTouchTarget));
         expect(size.height, greaterThanOrEqualTo(kMinimumTouchTarget));
       }
+    });
+  });
+
+  group('restyle bar (WORK-0035)', () {
+    Future<AnnotationController> pumpRestyle(
+      WidgetTester tester,
+      Annotation annotation,
+    ) async {
+      final controller = AnnotationController()..add(annotation);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: D3RestyleBar(controller: controller, selected: annotation),
+          ),
+        ),
+      );
+      return controller;
+    }
+
+    RectangleAnnotation rect() => RectangleAnnotation(
+      id: 'r',
+      style: const AnnotationStyle(),
+      rect: NormalizedRect(left: 0.1, top: 0.1, right: 0.5, bottom: 0.5),
+    );
+
+    CircleAnnotation circle() => CircleAnnotation(
+      id: 'c',
+      style: const AnnotationStyle(),
+      rect: NormalizedRect(left: 0.1, top: 0.1, right: 0.5, bottom: 0.5),
+    );
+
+    const arrow = ArrowAnnotation(
+      id: 'a',
+      style: AnnotationStyle(),
+      start: NormalizedPoint(0.1, 0.1),
+      end: NormalizedPoint(0.5, 0.5),
+    );
+
+    FreehandAnnotation freehand() => FreehandAnnotation(
+      id: 'f',
+      style: const AnnotationStyle(),
+      points: const [NormalizedPoint(0.1, 0.1), NormalizedPoint(0.5, 0.5)],
+    );
+
+    for (final entry in {
+      'rectangle': rect(),
+      'circle': circle(),
+      'arrow': arrow,
+      'freehand': freehand(),
+    }.entries) {
+      testWidgets(
+        'tapping a color swatch restyles the selected ${entry.key}, '
+        'undoably',
+        (tester) async {
+          final annotation = entry.value;
+          final controller = await pumpRestyle(tester, annotation);
+          final before = controller.annotations.single.style;
+
+          // The second swatch: not the already-selected default color.
+          final swatches = find.bySemanticsLabel('Color');
+          await tester.tap(swatches.at(1));
+          await tester.pumpAndSettle();
+
+          final after = controller.annotations.single.style;
+          expect(after.color, isNot(before.color));
+          expect(after, isNot(before), reason: 'restyle must be reflected');
+
+          controller.undo();
+          expect(controller.annotations.single.style, before,
+              reason: 'restyle must be a single undo step');
+        },
+      );
+    }
+
+    testWidgets('a fill toggle is offered for rectangles and circles', (
+      tester,
+    ) async {
+      await pumpRestyle(tester, rect());
+      expect(find.bySemanticsLabel('Fill'), findsOneWidget);
+    });
+
+    testWidgets('no fill toggle is offered for arrows', (tester) async {
+      await pumpRestyle(tester, arrow);
+      expect(find.bySemanticsLabel('Fill'), findsNothing);
+    });
+
+    testWidgets('no fill toggle is offered for freehand strokes', (
+      tester,
+    ) async {
+      await pumpRestyle(tester, freehand());
+      expect(find.bySemanticsLabel('Fill'), findsNothing);
+    });
+
+    testWidgets('the fill toggle flips filled, undoably', (tester) async {
+      final controller = await pumpRestyle(tester, rect());
+      expect(controller.annotations.single.style.filled, isFalse);
+
+      await tester.tap(find.bySemanticsLabel('Fill'));
+      await tester.pumpAndSettle();
+
+      expect(controller.annotations.single.style.filled, isTrue);
+
+      controller.undo();
+      expect(controller.annotations.single.style.filled, isFalse);
+    });
+
+    testWidgets('tapping a stroke-width swatch changes strokeWidth, undoably', (
+      tester,
+    ) async {
+      final controller = await pumpRestyle(tester, rect());
+      final before = controller.annotations.single.style.strokeWidth;
+
+      final swatches = find.bySemanticsLabel('Stroke width');
+      await tester.tap(swatches.at(2));
+      await tester.pumpAndSettle();
+
+      final after = controller.annotations.single.style.strokeWidth;
+      expect(after, isNot(before));
+
+      controller.undo();
+      expect(controller.annotations.single.style.strokeWidth, before);
     });
   });
 

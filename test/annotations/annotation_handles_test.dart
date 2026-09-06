@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' show Offset, Rect;
 
 import 'package:d3_image_annotator/d3_image_annotator.dart';
@@ -127,6 +128,58 @@ void main() {
         AnnotationGrip.topLeft,
       );
     });
+
+    test(
+      'a per-shape rotation (WORK-0035) moves a corner handle to where '
+      'the shape is actually drawn, not its unrotated stored corner',
+      () {
+        // rect corners at pixel (100,100)-(300,300), centre (200,200).
+        final shape = rectangle().copyWith(rotation: math.pi / 6); // 30°
+
+        // The unrotated top-left (100,100) is NOT where the shape's
+        // visual corner is any more -- a touch there must miss.
+        expect(
+          gripAt(shape, const Offset(100, 100), contentRect, ImageTransform.identity),
+          isNull,
+          reason: 'this is where the corner would be with no rotation',
+        );
+
+        // Rotate (100,100) by 30° about the centre (200,200) by hand,
+        // matching _rotateAround's convention exactly.
+        const center = Offset(200, 200);
+        final cosA = math.cos(math.pi / 6);
+        final sinA = math.sin(math.pi / 6);
+        const dx = -100.0;
+        const dy = -100.0;
+        final actualCorner = Offset(
+          center.dx + dx * cosA - dy * sinA,
+          center.dy + dx * sinA + dy * cosA,
+        );
+
+        expect(
+          gripAt(shape, actualCorner, contentRect, ImageTransform.identity),
+          AnnotationGrip.topLeft,
+          reason: 'the handle must be where the rotated shape visually is',
+        );
+      },
+    );
+
+    test('an unrotated shape offers a rotation handle beyond its top-right corner', () {
+      final positions = gripPositionsInPixels(
+        rectangle(),
+        contentRect,
+        ImageTransform.identity,
+      );
+
+      expect(positions, contains(AnnotationGrip.rotate));
+      final topRight = positions[AnnotationGrip.topRight]!;
+      final rotateHandle = positions[AnnotationGrip.rotate]!;
+      // Beyond the corner, continuing outward from the centre, not
+      // sitting on top of it or inside the shape.
+      expect((rotateHandle - topRight).distance, closeTo(kRotationHandleOffset, 1e-9));
+      expect(rotateHandle.dx, greaterThan(topRight.dx));
+      expect(rotateHandle.dy, lessThan(topRight.dy));
+    });
   });
 
   group('resizing', () {
@@ -205,6 +258,121 @@ void main() {
           stroke,
           AnnotationGrip.topLeft,
           const NormalizedPoint(0.5, 0.5),
+        ),
+        isNull,
+      );
+    });
+  });
+
+  group('rotated resize and rotation (WORK-0035)', () {
+    test(
+      'a corner drag on a 90-degree-rotated rect changes what was '
+      "originally its height, not its width -- resize follows the "
+      "shape's own tilted axes",
+      () {
+        // A tall rect, 0.2 wide x 0.4 tall, rotated a full quarter turn:
+        // on screen it now reads as wide and short, but its stored
+        // rect is untouched -- only `rotation` carries the tilt.
+        final tall = RectangleAnnotation(
+          id: 'r',
+          style: const AnnotationStyle(),
+          rect: NormalizedRect(left: 0.4, top: 0.3, right: 0.6, bottom: 0.7),
+          rotation: math.pi / 2,
+        );
+
+        // Drag the shape's on-screen bottom-right corner further along
+        // the axis that, before rotation, was the rect's *bottom* edge
+        // (i.e. increasing `bottom` in the unrotated frame) -- reached
+        // by inverse-rotating the intended local-frame point back into
+        // pixel space, exactly what `unrotatedEquivalentPoint` undoes.
+        final mappedRect = mapRectToPixels(
+          tall.bounds,
+          contentRect,
+          ImageTransform.identity,
+        );
+        final center = mappedRect.center;
+        // Local-frame target: push bottom-right's `bottom` outward.
+        final localTarget = Offset(mappedRect.right, mappedRect.bottom + 40);
+        final dx = localTarget.dx - center.dx;
+        final dy = localTarget.dy - center.dy;
+        final cosA = math.cos(tall.rotation);
+        final sinA = math.sin(tall.rotation);
+        final pixelPosition = Offset(
+          center.dx + dx * cosA - dy * sinA,
+          center.dy + dx * sinA + dy * cosA,
+        );
+
+        final unrotatedPoint = unrotatedEquivalentPoint(
+          tall,
+          pixelPosition,
+          contentRect,
+          ImageTransform.identity,
+        );
+        final resized =
+            resizeAnnotation(tall, AnnotationGrip.bottomRight, unrotatedPoint)!
+                as RectangleAnnotation;
+
+        expect(resized.rect.right, closeTo(tall.rect.right, 1e-6),
+            reason: 'the drag only pushed the local bottom edge, not the '
+                'local right edge');
+        expect(resized.rect.bottom, greaterThan(tall.rect.bottom),
+            reason: 'what was originally the rect\'s height must grow');
+        expect(resized.rotation, tall.rotation,
+            reason: 'resizing must not change rotation');
+      },
+    );
+
+    test(
+      'dragging the rotation handle changes only rotation, leaving the '
+      "rect's own bounds untouched",
+      () {
+        final shape = rectangle();
+        final positions = gripPositionsInPixels(
+          shape,
+          contentRect,
+          ImageTransform.identity,
+        );
+        final handle = positions[AnnotationGrip.rotate]!;
+
+        // Drag the rotation handle a further 90 degrees around the
+        // centre from its starting position.
+        final mappedRect = mapRectToPixels(
+          shape.bounds,
+          contentRect,
+          ImageTransform.identity,
+        );
+        final center = mappedRect.center;
+        final dx = handle.dx - center.dx;
+        final dy = handle.dy - center.dy;
+        // Rotate the handle's own offset by +90 degrees.
+        final dragged = Offset(center.dx - dy, center.dy + dx);
+
+        final rotated = rotateAnnotation(
+          shape,
+          dragged,
+          contentRect,
+          ImageTransform.identity,
+        )! as RectangleAnnotation;
+
+        expect(rotated.rect, shape.rect, reason: 'bounds must not change');
+        expect(rotated.rotation, closeTo(math.pi / 2, 1e-6));
+      },
+    );
+
+    test('rotateAnnotation returns null for shapes with no rotation field', () {
+      const arrow = ArrowAnnotation(
+        id: 'a',
+        style: AnnotationStyle(),
+        start: NormalizedPoint(0.2, 0.2),
+        end: NormalizedPoint(0.8, 0.8),
+      );
+
+      expect(
+        rotateAnnotation(
+          arrow,
+          const Offset(300, 100),
+          contentRect,
+          ImageTransform.identity,
         ),
         isNull,
       );

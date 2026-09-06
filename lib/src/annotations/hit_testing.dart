@@ -23,9 +23,9 @@ const double kAnnotationHitSlop = 20;
 /// the user sees and therefore what they expect to grab.
 ///
 /// [pixelPosition]/[contentRect]/[transform] are only used for rotated
-/// rectangles and circles (WORK-0033) -- see [_unrotatedEquivalent] for
-/// why a rotated shape cannot be tested in [point]'s space directly. An
-/// unrotated shape (the overwhelmingly common case) ignores all three
+/// rectangles and circles (WORK-0033) -- see [unrotatedEquivalentPoint]
+/// for why a rotated shape cannot be tested in [point]'s space directly.
+/// An unrotated shape (the overwhelmingly common case) ignores all three
 /// and is tested exactly as before.
 Annotation? hitTestAnnotations(
   List<Annotation> annotations,
@@ -40,9 +40,8 @@ Annotation? hitTestAnnotations(
     final annotation = annotations[i];
     final testPoint = pixelPosition == null
         ? point
-        : _unrotatedEquivalent(
+        : unrotatedEquivalentPoint(
             annotation,
-            point,
             pixelPosition,
             contentRect,
             transform,
@@ -52,72 +51,6 @@ Annotation? hitTestAnnotations(
     }
   }
   return null;
-}
-
-/// For a rotated rectangle or circle, the point [hitTest] should see
-/// instead of [point] -- i.e. where the tap would have landed on the
-/// *unrotated* shape, so the rest of [hitTest] needs no changes at all.
-///
-/// **Must work in pixel space, not [point]'s normalized space, for the
-/// same reason `_drawRotated` in `annotation_painter.dart` does.**
-/// `ImageTransform.mapPoint`'s crop step scales x and y independently,
-/// so inverse-rotating in pre-crop normalized space would distort the
-/// angle under a non-square crop exactly as drawing would -- verified
-/// numerically there before writing this. The painter maps the shape's
-/// unrotated corners to pixels first and rotates the result; this does
-/// the mirror image: map to pixels, inverse-rotate the *tap*, then hand
-/// [hitTest] a point that -- if un-mapped back through the normal
-/// pipeline -- lands where the tap would be on the shape with no
-/// rotation applied.
-NormalizedPoint _unrotatedEquivalent(
-  Annotation annotation,
-  NormalizedPoint point,
-  Offset pixelPosition,
-  Rect contentRect,
-  ImageTransform transform,
-) {
-  final rotation = switch (annotation) {
-    RectangleAnnotation(:final rotation) => rotation,
-    CircleAnnotation(:final rotation) => rotation,
-    ArrowAnnotation() || FreehandAnnotation() => 0.0,
-  };
-  if (rotation == 0.0) return point;
-
-  final mappedRect = mapRectToPixels(annotation.bounds, contentRect, transform);
-  final center = mappedRect.center;
-
-  // Inverse-rotate the tap around the shape's pixel-space centre --
-  // the opposite angle from how the painter rotates the shape itself.
-  final dx = pixelPosition.dx - center.dx;
-  final dy = pixelPosition.dy - center.dy;
-  final cosA = math.cos(-rotation);
-  final sinA = math.sin(-rotation);
-  final localPixel = Offset(
-    center.dx + dx * cosA - dy * sinA,
-    center.dy + dx * sinA + dy * cosA,
-  );
-
-  return _toOriginalSpace(localPixel, contentRect, transform);
-}
-
-/// The inverse of [mapPointToPixels] followed by
-/// [ImageTransform.unmapPoint] -- pixel space back to the original,
-/// pre-transform normalized space [hitTest] operates in.
-NormalizedPoint _toOriginalSpace(
-  Offset pixel,
-  Rect contentRect,
-  ImageTransform transform,
-) {
-  final x = contentRect.width == 0
-      ? 0.0
-      : (pixel.dx - contentRect.left) / contentRect.width;
-  final y = contentRect.height == 0
-      ? 0.0
-      : (pixel.dy - contentRect.top) / contentRect.height;
-  if (transform.isIdentity) {
-    return NormalizedPoint(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
-  }
-  return transform.unmapPoint(x, y);
 }
 
 /// Whether [point] hits [annotation] within the given per-axis

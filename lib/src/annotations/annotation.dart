@@ -235,6 +235,19 @@ final class FreehandAnnotation extends Annotation {
   String toString() => 'FreehandAnnotation($id, ${points.length} points)';
 }
 
+/// [annotation]'s rotation (WORK-0033), or `0.0` for a type that has
+/// none.
+///
+/// Only `RectangleAnnotation`/`CircleAnnotation` carry a `rotation`
+/// field; consolidated here rather than repeating this same `switch` at
+/// every site that needs to know whether a shape is rotated (the
+/// painter, hit-testing, and floating shape controls all do).
+double rotationOf(Annotation annotation) => switch (annotation) {
+  RectangleAnnotation(:final rotation) => rotation,
+  CircleAnnotation(:final rotation) => rotation,
+  ArrowAnnotation() || FreehandAnnotation() => 0.0,
+};
+
 /// Translates [annotation] by a normalized delta, or returns null if the
 /// move would push any part of it outside the image.
 ///

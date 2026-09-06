@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' show Offset, Rect;
 
 import '../coordinates/normalized_point.dart';
@@ -56,6 +57,175 @@ Rect mapRectToPixels(
   return Rect.fromPoints(a, b);
 }
 
+/// The four corners of [mapped] (an unrotated, already-mapped pixel-space
+/// rect) after rotating [rotationRadians] about its own centre, in
+/// on-screen order: top-left, top-right, bottom-right, bottom-left
+/// *as drawn*, which is a different physical corner from the unrotated
+/// labelling once rotated past a quarter turn.
+///
+/// The same rotation `annotation_painter.dart`'s `_drawRotated` applies
+/// via a canvas transform, but returned as points rather than left
+/// inside a transformed coordinate system -- needed anywhere that draws
+/// or hit-tests against the shape's actual on-screen outline directly
+/// (a dashed selection border, a floating control's anchor point) rather
+/// than drawing *through* a rotated canvas the way the shape's own fill
+/// is painted.
+List<Offset> rotatedCorners(Rect mapped, double rotationRadians) {
+  final center = mapped.center;
+  final corners = [
+    mapped.topLeft,
+    mapped.topRight,
+    mapped.bottomRight,
+    mapped.bottomLeft,
+  ];
+  if (rotationRadians == 0.0) return corners;
+
+  final cosA = math.cos(rotationRadians);
+  final sinA = math.sin(rotationRadians);
+  return [
+    for (final corner in corners)
+      _rotateAround(corner, center, cosA, sinA),
+  ];
+}
+
+Offset _rotateAround(Offset point, Offset center, double cosA, double sinA) {
+  final dx = point.dx - center.dx;
+  final dy = point.dy - center.dy;
+  return Offset(
+    center.dx + dx * cosA - dy * sinA,
+    center.dy + dx * sinA + dy * cosA,
+  );
+}
+
+/// Fixed pixel gap between a selected shape's bounds and its floating
+/// delete/duplicate controls (WORK-0035).
+///
+/// Larger than half of `kMinimumTouchTarget` (24) so the control's own
+/// touch target clears the shape's edge entirely rather than overlapping
+/// it -- a smaller gap would put part of the × button's tappable area
+/// directly on the shape's border, competing with body/edge hit-testing
+/// for the same pixels.
+const double kFloatingControlOffset = 36;
+
+/// Fixed pixel gap between the delete and duplicate controls themselves.
+const double kFloatingControlSpacing = 44;
+
+/// Where the floating delete (×) and duplicate (+1) controls anchor for
+/// [annotation], in pixel space -- always in that order, delete first.
+///
+/// Placed along the shape's own (rotated, for a rectangle or circle)
+/// top edge, offset outward past it by [kFloatingControlOffset]: a
+/// position that deliberately avoids the four resize corners and the
+/// rotation handle beyond the top-right one ([gripPositionsInPixels]),
+/// so the two control clusters do not compete for the same touch
+/// target. Centred on the top edge rather than tucked in a corner so it
+/// stays clear of the resize/rotate handles regardless of the shape's
+/// aspect ratio.
+///
+/// An arrow or freehand stroke has no `rotation`, so this is simply
+/// centred above its (unrotated) bounds -- still correct, since
+/// [rotatedCorners] is a no-op at `rotation == 0.0`.
+List<Offset> floatingControlAnchors(
+  Annotation annotation,
+  Rect contentRect,
+  ImageTransform transform,
+) {
+  final mapped = mapRectToPixels(annotation.bounds, contentRect, transform);
+  final corners = rotatedCorners(mapped, rotationOf(annotation));
+  final topLeft = corners[0];
+  final topRight = corners[1];
+  final topMid = Offset(
+    (topLeft.dx + topRight.dx) / 2,
+    (topLeft.dy + topRight.dy) / 2,
+  );
+
+  // Outward means "away from the shape's centre", which for the top
+  // edge's midpoint is simply away from the bottom edge's midpoint --
+  // works at any rotation since both are already-rotated points.
+  final bottomLeft = corners[3];
+  final bottomRight = corners[2];
+  final bottomMid = Offset(
+    (bottomLeft.dx + bottomRight.dx) / 2,
+    (bottomLeft.dy + bottomRight.dy) / 2,
+  );
+  final outward = topMid - bottomMid;
+  final length = outward.distance;
+  final direction = length < 1e-9 ? const Offset(0, -1) : outward / length;
+
+  final along = topRight - topLeft;
+  final alongLength = along.distance;
+  final alongDirection =
+      alongLength < 1e-9 ? const Offset(1, 0) : along / alongLength;
+
+  final base = topMid + direction * kFloatingControlOffset;
+  return [
+    base - alongDirection * (kFloatingControlSpacing / 2),
+    base + alongDirection * (kFloatingControlSpacing / 2),
+  ];
+}
+
+/// The point on [annotation]'s *unrotated* shape that [pixelPosition]
+/// corresponds to, given it landed on the shape as actually drawn
+/// (rotated by [rotationOf]).
+///
+/// Shared by hit-testing (WORK-0033) and rotation-aware resize
+/// (WORK-0035): both need to take a pixel position on a rotated shape's
+/// visual outline and turn it into "the equivalent position if this
+/// shape had no rotation applied", then hand that to logic (`hitTest`,
+/// `_resizeRect`) written without rotation in mind at all.
+///
+/// **Must work in pixel space, not normalized space, for the same
+/// reason `_drawRotated` in `annotation_painter.dart` does** --
+/// `ImageTransform.mapPoint`'s crop step scales x and y independently,
+/// so inverse-rotating before that mapping would distort the angle
+/// under a non-square crop. This inverse-rotates the pixel position
+/// around the shape's mapped centre, the mirror image of how the
+/// painter rotates the shape itself, then un-maps the result back
+/// through the normal pipeline.
+NormalizedPoint unrotatedEquivalentPoint(
+  Annotation annotation,
+  Offset pixelPosition,
+  Rect contentRect,
+  ImageTransform transform,
+) {
+  final rotation = rotationOf(annotation);
+  if (rotation == 0.0) {
+    return _toOriginalSpace(pixelPosition, contentRect, transform);
+  }
+
+  final center = mapRectToPixels(annotation.bounds, contentRect, transform).center;
+  final dx = pixelPosition.dx - center.dx;
+  final dy = pixelPosition.dy - center.dy;
+  final cosA = math.cos(-rotation);
+  final sinA = math.sin(-rotation);
+  final localPixel = Offset(
+    center.dx + dx * cosA - dy * sinA,
+    center.dy + dx * sinA + dy * cosA,
+  );
+  return _toOriginalSpace(localPixel, contentRect, transform);
+}
+
+/// The inverse of [mapPointToPixels] followed by
+/// [ImageTransform.unmapPoint] -- pixel space back to the original,
+/// pre-transform normalized space geometry logic (`hitTest`,
+/// `_resizeRect`) operates in.
+NormalizedPoint _toOriginalSpace(
+  Offset pixel,
+  Rect contentRect,
+  ImageTransform transform,
+) {
+  final x = contentRect.width == 0
+      ? 0.0
+      : (pixel.dx - contentRect.left) / contentRect.width;
+  final y = contentRect.height == 0
+      ? 0.0
+      : (pixel.dy - contentRect.top) / contentRect.height;
+  if (transform.isIdentity) {
+    return NormalizedPoint(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+  }
+  return transform.unmapPoint(x, y);
+}
+
 /// Touch target for a resize handle, in logical pixels.
 ///
 /// Pixels, not normalized units — a finger is the same size whatever the
@@ -81,6 +251,14 @@ enum AnnotationGrip {
 
   /// An arrow's head.
   end,
+
+  /// Changes a rectangle's or circle's `rotation` only, leaving its
+  /// `rect` untouched (WORK-0035). A dedicated grip rather than folding
+  /// this into a corner: a single handle doing both needs a precise,
+  /// untested boundary between "close enough to rotate" and "on the
+  /// corner to resize", which this package has a documented history of
+  /// getting wrong (WORK-0025).
+  rotate,
 }
 
 /// The grips [annotation] offers, in *original image* space.
@@ -104,6 +282,72 @@ Map<AnnotationGrip, NormalizedPoint> gripsOf(Annotation annotation) {
   };
 }
 
+/// Fixed pixel distance the rotation handle sits outside the shape's
+/// top-right corner, along the shape's own rotated axis.
+///
+/// Pixels, not normalized units, for the same reason [kHandleHitSlop]
+/// is: a comfortable reach-outside-the-corner distance for a finger
+/// does not change with the image's resolution.
+const double kRotationHandleOffset = 28;
+
+/// Where each of [annotation]'s grips actually renders on screen, in
+/// *pixel* space -- the single source of truth [gripAt] and the painter
+/// both consult, so a handle is never drawn somewhere other than where
+/// it hit-tests.
+///
+/// For an unrotated shape this is just [gripsOf] mapped through
+/// [transform]. For a rotated rectangle or circle, [gripsOf]'s corners
+/// (the shape's *unrotated* stored corners) are rotated about the
+/// mapped centre by [rotationOf] first -- the same pixel-space rotation
+/// `_drawRotated` in `annotation_painter.dart` applies when actually
+/// drawing the shape, so a handle always sits on the shape's true,
+/// on-screen corner rather than the unrotated one WORK-0033 left this
+/// as a gap (see WORK-0035's decision).
+///
+/// Rectangles and circles additionally offer [AnnotationGrip.rotate], a
+/// fifth point placed [kRotationHandleOffset] pixels beyond the
+/// top-right corner, continuing straight out along the centre-to-corner
+/// diagonal -- a direction that rotates rigidly with the shape, so the
+/// handle stays anchored to "outside that corner" at any angle rather
+/// than drifting once the shape turns.
+Map<AnnotationGrip, Offset> gripPositionsInPixels(
+  Annotation annotation,
+  Rect contentRect,
+  ImageTransform transform,
+) {
+  final grips = gripsOf(annotation);
+  final mapped = {
+    for (final entry in grips.entries)
+      entry.key: mapPointToPixels(entry.value, contentRect, transform),
+  };
+
+  final rotation = rotationOf(annotation);
+  final center = mapRectToPixels(annotation.bounds, contentRect, transform).center;
+
+  final positioned = rotation == 0.0
+      ? mapped
+      : {
+          for (final entry in mapped.entries)
+            entry.key: _rotateAround(
+              entry.value,
+              center,
+              math.cos(rotation),
+              math.sin(rotation),
+            ),
+        };
+
+  final topRight = positioned[AnnotationGrip.topRight];
+  if (topRight != null) {
+    final outward = topRight - center;
+    final length = outward.distance;
+    final direction = length < 1e-9 ? const Offset(0, -1) : outward / length;
+    positioned[AnnotationGrip.rotate] =
+        topRight + direction * kRotationHandleOffset;
+  }
+
+  return positioned;
+}
+
 /// The grip of [annotation] under [position], or null.
 ///
 /// [position] and the grips are compared in *widget* space, because the
@@ -124,12 +368,7 @@ AnnotationGrip? gripAt(
   AnnotationGrip? best;
   var bestDistance = double.infinity;
 
-  gripsOf(annotation).forEach((grip, point) {
-    final mapped = transform.mapPoint(point);
-    final at = Offset(
-      contentRect.left + mapped.x * contentRect.width,
-      contentRect.top + mapped.y * contentRect.height,
-    );
+  gripPositionsInPixels(annotation, contentRect, transform).forEach((grip, at) {
     final distance = (position - at).distance;
     // Nearest wins, so overlapping handles on a small shape still
     // resolve to one deterministically rather than by declaration order.
@@ -148,6 +387,16 @@ AnnotationGrip? gripAt(
 /// Returning null rather than clamping to a minimum keeps the caller's
 /// options open: dragging a corner past its opposite is a no-op here
 /// instead of silently pinning the shape to an arbitrary floor.
+///
+/// [point] must already be [annotation]'s *unrotated-equivalent* point
+/// -- for a rotated rectangle or circle, callers get this by passing the
+/// live drag through [unrotatedEquivalentPoint] first (WORK-0035: corner
+/// -drag resizes along the shape's own tilted axes, so the drag has to
+/// land in the shape's local, unrotated frame before this rect-only
+/// math runs). `hit_testing.dart` establishes the same
+/// inverse-rotate-then-reuse-unrotated-logic pattern for hit-testing;
+/// this is its resize counterpart. [AnnotationGrip.rotate] is not
+/// handled here at all -- see [rotateAnnotation].
 Annotation? resizeAnnotation(
   Annotation annotation,
   AnnotationGrip grip,
@@ -178,6 +427,49 @@ Annotation? resizeAnnotation(
   }
 }
 
+/// Returns [annotation] with its `rotation` set so that its (rotated)
+/// top-right corner points at [pixelPosition], or null for a type that
+/// has no rotation.
+///
+/// Deliberately separate from [resizeAnnotation]: dragging
+/// [AnnotationGrip.rotate] must change *only* `rotation`, leaving
+/// `rect`'s `left`/`top`/`right`/`bottom` untouched (WORK-0035) -- a
+/// shape does not change size because it turned.
+///
+/// Works entirely in pixel space, comparing the drag against the
+/// shape's mapped (unrotated) centre and its unrotated top-right
+/// corner, then taking the angle *between* them -- this stays correct
+/// under an anisotropic crop for the same reason every other rotation
+/// computation in this package does: an angle is only meaningful once
+/// both points it is measured between have already been mapped through
+/// the same (possibly anisotropic) pipeline.
+Annotation? rotateAnnotation(
+  Annotation annotation,
+  Offset pixelPosition,
+  Rect contentRect,
+  ImageTransform transform,
+) {
+  final mappedRect = mapRectToPixels(annotation.bounds, contentRect, transform);
+  final center = mappedRect.center;
+  final unrotatedCorner = mappedRect.topRight;
+
+  final baseAngle = math.atan2(
+    unrotatedCorner.dy - center.dy,
+    unrotatedCorner.dx - center.dx,
+  );
+  final dragAngle = math.atan2(
+    pixelPosition.dy - center.dy,
+    pixelPosition.dx - center.dx,
+  );
+  final rotation = dragAngle - baseAngle;
+
+  return switch (annotation) {
+    RectangleAnnotation() => annotation.copyWith(rotation: rotation),
+    CircleAnnotation() => annotation.copyWith(rotation: rotation),
+    ArrowAnnotation() || FreehandAnnotation() => null,
+  };
+}
+
 NormalizedRect? _resizeRect(
   NormalizedRect rect,
   AnnotationGrip grip,
@@ -204,6 +496,7 @@ NormalizedRect? _resizeRect(
       bottom = point.y;
     case AnnotationGrip.start:
     case AnnotationGrip.end:
+    case AnnotationGrip.rotate:
       return null;
   }
 

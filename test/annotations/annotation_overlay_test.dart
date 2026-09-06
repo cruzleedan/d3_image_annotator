@@ -534,4 +534,101 @@ void main() {
       expect(controller.selectedId, isNull);
     });
   });
+
+  group('floating shape controls (WORK-0035)', () {
+    RectangleAnnotation target() => RectangleAnnotation(
+      id: 'target',
+      style: const AnnotationStyle(),
+      rect: NormalizedRect(left: 0.3, top: 0.3, right: 0.7, bottom: 0.7),
+    );
+
+    testWidgets('no floating controls when nothing is selected', (
+      tester,
+    ) async {
+      final controller = AnnotationController()..add(target());
+      await pumpOverlay(
+        tester,
+        tool: AnnotationTool.rectangle,
+        controller: controller,
+      );
+
+      expect(find.byTooltip('Delete'), findsNothing);
+      expect(find.byTooltip('Duplicate'), findsNothing);
+    });
+
+    testWidgets('the floating x deletes the selection as one undo step', (
+      tester,
+    ) async {
+      final controller = AnnotationController()..add(target());
+      controller.select('target');
+      await pumpOverlay(
+        tester,
+        tool: AnnotationTool.rectangle,
+        controller: controller,
+      );
+
+      expect(find.byTooltip('Delete'), findsOneWidget);
+      await tester.tap(find.byTooltip('Delete'));
+      await tester.pumpAndSettle();
+
+      expect(controller.annotations, isEmpty);
+      expect(controller.selectedId, isNull);
+
+      controller.undo();
+      expect(controller.annotations.single.id, 'target',
+          reason: 'delete must be a single undo step');
+    });
+
+    testWidgets(
+      'the floating +1 duplicates the selection and selects the copy',
+      (tester) async {
+        final controller = AnnotationController()..add(target());
+        controller.select('target');
+        await pumpOverlay(
+          tester,
+          tool: AnnotationTool.rectangle,
+          controller: controller,
+        );
+
+        expect(find.byTooltip('Duplicate'), findsOneWidget);
+        await tester.tap(find.byTooltip('Duplicate'));
+        await tester.pumpAndSettle();
+
+        expect(controller.annotations, hasLength(2));
+        expect(controller.selectedId, isNot('target'),
+            reason: 'the new copy should be selected, not the original');
+
+        controller.undo();
+        expect(controller.annotations, hasLength(1),
+            reason: 'duplicate must be a single undo step');
+      },
+    );
+
+    testWidgets(
+      'tapping the floating controls does not also draw or move a shape',
+      (tester) async {
+        // The controls are siblings of the drawing GestureDetector, not
+        // descendants of it -- a tap that lands on the x/+1 must not
+        // also register as a tap-to-select or a body drag underneath.
+        final controller = AnnotationController()..add(target());
+        controller.select('target');
+        await pumpOverlay(
+          tester,
+          tool: AnnotationTool.rectangle,
+          controller: controller,
+        );
+
+        final before =
+            (controller.annotations.single as RectangleAnnotation).rect;
+        await tester.tap(find.byTooltip('Duplicate'));
+        await tester.pumpAndSettle();
+
+        final original = controller.annotations.firstWhere(
+          (a) => a.id == 'target',
+        ) as RectangleAnnotation;
+        expect(original.rect, before,
+            reason: 'the original must not have moved or resized');
+      },
+    );
+  });
 }
