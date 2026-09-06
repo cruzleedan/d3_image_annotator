@@ -22,4 +22,10 @@ enum AnnotationTool {
 
   /// Drag to draw a free path.
   freehand,
+
+  /// Tap to place an insertion point and type -- the only tool here
+  /// with no drag phase at all (WORK-0034). A tap on empty space opens
+  /// an overlay text field at that point instead of starting a growing
+  /// draft; see `AnnotationOverlay`'s text-entry lifecycle.
+  text,
 }

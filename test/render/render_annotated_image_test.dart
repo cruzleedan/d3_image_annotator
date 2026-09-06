@@ -500,6 +500,54 @@ void main() {
       expect(await _pixelAt(rendered, 0.75, 0.75), const Color(0xFFFFFFFF));
     });
 
+    test(
+      'text survives the background-isolate encode path (WORK-0034) -- '
+      'rasterized before compositing, so the encode worker never needs '
+      'font access at all',
+      () async {
+        const size = kAsyncEncodeThresholdPixels;
+        final source = await _whiteImage(size, size);
+
+        final bytes = await renderAnnotatedImage(
+          imageBytes: source,
+          annotations: const [
+            TextAnnotation(
+              id: 't',
+              style: AnnotationStyle(
+                color: Color(0xFFFF0000),
+                fontSize: 0.1,
+              ),
+              position: NormalizedPoint(0.1, 0.1),
+              text: 'X',
+            ),
+          ],
+        );
+
+        final rendered = await _decode(bytes);
+        addTearDown(rendered.dispose);
+        expect(rendered.width, size);
+
+        // Somewhere inside the glyph's rendered box, a red pixel must
+        // exist -- if text were silently dropped or substituted by the
+        // background-isolate encode path, every pixel in this region
+        // would still be plain white.
+        var foundRed = false;
+        for (var dx = 0.0; dx <= 0.1; dx += 0.01) {
+          for (var dy = 0.0; dy <= 0.1; dy += 0.01) {
+            final color = await _pixelAt(rendered, 0.1 + dx, 0.1 + dy);
+            if (color.r > 0.5 && color.g < 0.3 && color.b < 0.3) {
+              foundRed = true;
+              break;
+            }
+          }
+          if (foundRed) break;
+        }
+        expect(foundRed, isTrue,
+            reason: 'the text glyph must actually be painted, not '
+                'silently dropped by the background-isolate encoder');
+      },
+    );
+
     test('the threshold is measured against the output, not the source',
         () async {
       // A large source cropped down to a small output should take the

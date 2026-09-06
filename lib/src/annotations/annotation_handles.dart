@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 import 'dart:ui' show Offset, Rect;
 
+import 'package:flutter/painting.dart' show TextPainter, TextSpan, TextStyle, TextDirection;
+
 import '../coordinates/normalized_point.dart';
 import '../coordinates/normalized_rect.dart';
 import '../geometry/image_transform.dart';
@@ -24,6 +26,32 @@ Offset mapPointToPixels(
     contentRect.left + mapped.x * contentRect.width,
     contentRect.top + mapped.y * contentRect.height,
   );
+}
+
+/// The pixel length `AnnotationStyle.strokeWidth`/`AnnotationStyle
+/// .fontSize` are resolved against -- the whole image's shorter side as
+/// currently displayed, not the visible [contentRect].
+///
+/// Those differ under crop: cropping shrinks the content rect, which
+/// `contain` then scales back up to fill the viewport, so the rect's
+/// shorter side barely changes while the content beneath it is
+/// magnified. Dividing by the crop's extent undoes that magnification,
+/// so a mark (or a piece of text) keeps its weight relative to the
+/// picture -- the rule this package documents: annotations scale *with*
+/// the image. Shared here rather than kept private to
+/// `annotation_painter.dart` alone, since [textBoundsInPixels] needs the
+/// exact same value to lay text out at the size it will actually be
+/// drawn -- a hit box computed against a different font size than the
+/// one painted would silently drift from what the user sees.
+double shorterSidePixels(Rect contentRect, ImageTransform transform) {
+  final crop = transform.effectiveCrop;
+  final fullWidth = crop.width == 0
+      ? contentRect.width
+      : contentRect.width / crop.width;
+  final fullHeight = crop.height == 0
+      ? contentRect.height
+      : contentRect.height / crop.height;
+  return math.min(fullWidth, fullHeight);
 }
 
 /// Projects a normalized rect through [transform] into widget/pixel
@@ -55,6 +83,49 @@ Rect mapRectToPixels(
     transform,
   );
   return Rect.fromPoints(a, b);
+}
+
+/// The exact, unrotated on-screen box [text] occupies in pixel space,
+/// via a real `TextPainter` layout pass at the font size it will
+/// actually be drawn at.
+///
+/// **This is [TextAnnotation]'s real `bounds`** -- its own
+/// `bounds` getter (in `annotation.dart`) can only offer a coarse
+/// per-character estimate, since a zero-argument getter has no way to
+/// know [contentRect]/[transform], which is what [shorterSidePixels]
+/// (and therefore the resolved pixel font size) actually depends on.
+/// Every real consumer of a text annotation's on-screen box --
+/// `annotation_painter.dart`'s drawing, `hit_testing.dart`'s precise hit
+/// test, this file's own handle/floating-control placement -- calls
+/// this instead of routing through the coarse estimate.
+///
+/// Anchored at [TextAnnotation.position] as the top-left corner, mapped
+/// through [transform] the same way every other point is, then sized by
+/// laying the text out at its *unrotated* size -- callers that need the
+/// rotated on-screen box apply [rotatedCorners] to the result themselves,
+/// the same pattern `mapRectToPixels` already establishes for
+/// rectangles/circles.
+Rect textBoundsInPixels(
+  TextAnnotation text,
+  Rect contentRect,
+  ImageTransform transform,
+) {
+  final fontSizePixels = text.style.resolveFontSize(
+    shorterSidePixels(contentRect, transform),
+  );
+  final painter = TextPainter(
+    text: TextSpan(
+      text: text.text,
+      style: TextStyle(
+        color: text.style.color,
+        fontSize: fontSizePixels,
+      ),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+
+  final topLeft = mapPointToPixels(text.position, contentRect, transform);
+  return topLeft & painter.size;
 }
 
 /// The four corners of [mapped] (an unrotated, already-mapped pixel-space
@@ -130,7 +201,9 @@ List<Offset> floatingControlAnchors(
   Rect contentRect,
   ImageTransform transform,
 ) {
-  final mapped = mapRectToPixels(annotation.bounds, contentRect, transform);
+  final mapped = annotation is TextAnnotation
+      ? textBoundsInPixels(annotation, contentRect, transform)
+      : mapRectToPixels(annotation.bounds, contentRect, transform);
   final corners = rotatedCorners(mapped, rotationOf(annotation));
   final topLeft = corners[0];
   final topRight = corners[1];
@@ -193,7 +266,10 @@ NormalizedPoint unrotatedEquivalentPoint(
     return _toOriginalSpace(pixelPosition, contentRect, transform);
   }
 
-  final center = mapRectToPixels(annotation.bounds, contentRect, transform).center;
+  final center = (annotation is TextAnnotation
+          ? textBoundsInPixels(annotation, contentRect, transform)
+          : mapRectToPixels(annotation.bounds, contentRect, transform))
+      .center;
   final dx = pixelPosition.dx - center.dx;
   final dy = pixelPosition.dy - center.dy;
   final cosA = math.cos(-rotation);
@@ -266,6 +342,15 @@ enum AnnotationGrip {
 /// Freehand strokes offer none: scaling a sampled path is a different
 /// operation from dragging a corner, and naive per-point scaling
 /// distorts the stroke. They can still be moved and deleted.
+///
+/// Text also returns none here, for a different reason: its corners are
+/// only knowable in pixel space (a `TextPainter` layout pass, via
+/// [textBoundsInPixels]), not this normalized-space contract --
+/// [gripPositionsInPixels] computes text's actual grip positions
+/// directly rather than through this function at all. This still
+/// returns an empty map, not an error, so a caller checking "does this
+/// have grips" through [gripsOf] alone gets a coherent (if incomplete)
+/// answer rather than an exception.
 Map<AnnotationGrip, NormalizedPoint> gripsOf(Annotation annotation) {
   return switch (annotation) {
     RectangleAnnotation(:final rect) || CircleAnnotation(:final rect) => {
@@ -278,7 +363,7 @@ Map<AnnotationGrip, NormalizedPoint> gripsOf(Annotation annotation) {
       AnnotationGrip.start: start,
       AnnotationGrip.end: end,
     },
-    FreehandAnnotation() => const {},
+    FreehandAnnotation() || TextAnnotation() => const {},
   };
 }
 
@@ -315,14 +400,32 @@ Map<AnnotationGrip, Offset> gripPositionsInPixels(
   Rect contentRect,
   ImageTransform transform,
 ) {
-  final grips = gripsOf(annotation);
-  final mapped = {
-    for (final entry in grips.entries)
-      entry.key: mapPointToPixels(entry.value, contentRect, transform),
-  };
+  // Text's real on-screen box only exists in pixel space (a
+  // TextPainter layout pass) -- annotation.bounds is only ever a coarse
+  // normalized estimate for this type (see TextAnnotation.bounds), so
+  // corners are computed from textBoundsInPixels directly rather than
+  // through gripsOf/mapRectToPixels the way every stored-rect type is.
+  final Map<AnnotationGrip, Offset> mapped;
+  final Offset center;
+  if (annotation is TextAnnotation) {
+    final box = textBoundsInPixels(annotation, contentRect, transform);
+    mapped = {
+      AnnotationGrip.topLeft: box.topLeft,
+      AnnotationGrip.topRight: box.topRight,
+      AnnotationGrip.bottomLeft: box.bottomLeft,
+      AnnotationGrip.bottomRight: box.bottomRight,
+    };
+    center = box.center;
+  } else {
+    final grips = gripsOf(annotation);
+    mapped = {
+      for (final entry in grips.entries)
+        entry.key: mapPointToPixels(entry.value, contentRect, transform),
+    };
+    center = mapRectToPixels(annotation.bounds, contentRect, transform).center;
+  }
 
   final rotation = rotationOf(annotation);
-  final center = mapRectToPixels(annotation.bounds, contentRect, transform).center;
 
   final positioned = rotation == 0.0
       ? mapped
@@ -424,6 +527,14 @@ Annotation? resizeAnnotation(
 
     case FreehandAnnotation():
       return null;
+
+    case TextAnnotation():
+      // Text has no draggable corner-resize: its extent follows from
+      // its content and `AnnotationStyle.fontSize`, not a dragged rect,
+      // so there is nothing for a corner grip to do (text offers none
+      // via `gripsOf` in the first place -- this case exists only to
+      // keep the switch exhaustive).
+      return null;
   }
 }
 
@@ -449,7 +560,11 @@ Annotation? rotateAnnotation(
   Rect contentRect,
   ImageTransform transform,
 ) {
-  final mappedRect = mapRectToPixels(annotation.bounds, contentRect, transform);
+  // Text's unrotated box only exists in pixel space -- see
+  // gripPositionsInPixels for the same reasoning.
+  final mappedRect = annotation is TextAnnotation
+      ? textBoundsInPixels(annotation, contentRect, transform)
+      : mapRectToPixels(annotation.bounds, contentRect, transform);
   final center = mappedRect.center;
   final unrotatedCorner = mappedRect.topRight;
 
@@ -466,6 +581,7 @@ Annotation? rotateAnnotation(
   return switch (annotation) {
     RectangleAnnotation() => annotation.copyWith(rotation: rotation),
     CircleAnnotation() => annotation.copyWith(rotation: rotation),
+    TextAnnotation() => annotation.copyWith(rotation: rotation),
     ArrowAnnotation() || FreehandAnnotation() => null,
   };
 }

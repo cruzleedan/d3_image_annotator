@@ -381,6 +381,20 @@ const List<Color> kRestyleColors = [
 /// shorter side -- see [AnnotationStyle.strokeWidth].
 const List<double> kRestyleStrokeWidths = [0.0025, 0.005, 0.01];
 
+/// Font sizes [D3RestyleBar] offers for [TextAnnotation]s, as fractions
+/// of the image's shorter side -- see [AnnotationStyle.fontSize]
+/// (WORK-0034).
+const List<double> kRestyleFontSizes = [0.02, 0.03, 0.05];
+
+/// Background-colour choices [D3RestyleBar] offers for [TextAnnotation]s
+/// -- the first entry (null) is "no background", matching
+/// [AnnotationStyle.backgroundColor]'s own default.
+const List<Color?> kRestyleTextBackgrounds = [
+  null,
+  Color(0x99000000),
+  Color(0x99FFFFFF),
+];
+
 /// Colour, stroke-width, and fill controls for the selected annotation
 /// (WORK-0035).
 ///
@@ -412,9 +426,14 @@ class D3RestyleBar extends StatelessWidget {
   /// Fill has no meaning for a shape with no interior -- honouring it
   /// would either do nothing (arrows are always stroked, per
   /// `annotation_painter.dart`) or silently vanish a freehand stroke
-  /// behind a fill that was never drawn.
+  /// behind a fill that was never drawn. Text's analogous concept is
+  /// its own `backgroundColor` control below, not this one.
   bool get _supportsFill =>
       selected is RectangleAnnotation || selected is CircleAnnotation;
+
+  /// Stroke width means nothing for text -- it has no stroke, only a
+  /// font size (WORK-0034).
+  bool get _isText => selected is TextAnnotation;
 
   void _apply(AnnotationStyle style) {
     controller.update(selected.id, selected.copyWithStyle(style));
@@ -435,18 +454,41 @@ class D3RestyleBar extends StatelessWidget {
               onTap: () => _apply(style.copyWith(color: color)),
             ),
           const SizedBox(width: 8),
-          for (final width in kRestyleStrokeWidths)
-            _StrokeWidthSwatch(
-              strokeWidth: width,
-              selected: style.strokeWidth == width,
-              onTap: () => _apply(style.copyWith(strokeWidth: width)),
-            ),
-          if (_supportsFill) ...[
+          if (_isText) ...[
+            for (final fontSize in kRestyleFontSizes)
+              _SizeSwatch(
+                value: fontSize,
+                label: 'Font size',
+                selected: style.fontSize == fontSize,
+                onTap: () => _apply(style.copyWith(fontSize: fontSize)),
+              ),
             const SizedBox(width: 8),
-            _FillToggle(
-              filled: style.filled,
-              onTap: () => _apply(style.copyWith(filled: !style.filled)),
-            ),
+            for (final background in kRestyleTextBackgrounds)
+              _TextBackgroundSwatch(
+                color: background,
+                selected: style.backgroundColor?.toARGB32() ==
+                    background?.toARGB32(),
+                onTap: () => _apply(
+                  background == null
+                      ? style.copyWith(clearBackgroundColor: true)
+                      : style.copyWith(backgroundColor: background),
+                ),
+              ),
+          ] else ...[
+            for (final width in kRestyleStrokeWidths)
+              _SizeSwatch(
+                value: width,
+                label: 'Stroke width',
+                selected: style.strokeWidth == width,
+                onTap: () => _apply(style.copyWith(strokeWidth: width)),
+              ),
+            if (_supportsFill) ...[
+              const SizedBox(width: 8),
+              _FillToggle(
+                filled: style.filled,
+                onTap: () => _apply(style.copyWith(filled: !style.filled)),
+              ),
+            ],
           ],
         ],
       ),
@@ -500,26 +542,31 @@ class _ColorSwatch extends StatelessWidget {
   }
 }
 
-class _StrokeWidthSwatch extends StatelessWidget {
-  const _StrokeWidthSwatch({
-    required this.strokeWidth,
+/// A dot-sized-by-value swatch, shared by stroke width and (WORK-0034)
+/// font size -- both are "pick one of a few relative sizes" controls
+/// differing only in [label] and which `AnnotationStyle` field they set.
+class _SizeSwatch extends StatelessWidget {
+  const _SizeSwatch({
+    required this.value,
     required this.selected,
     required this.onTap,
+    required this.label,
   });
 
-  final double strokeWidth;
+  final double value;
   final bool selected;
   final VoidCallback onTap;
+  final String label;
 
   @override
   Widget build(BuildContext context) {
     // Dot size communicates relative weight directly, rather than
     // making the user compare numbers they cannot see the effect of.
-    final dotSize = 6 + strokeWidth * 800;
+    final dotSize = 6 + value * 800;
     return Semantics(
       button: true,
       selected: selected,
-      label: 'Stroke width',
+      label: label,
       excludeSemantics: true,
       child: InkWell(
         onTap: onTap,
@@ -570,6 +617,59 @@ class _FillToggle extends StatelessWidget {
             filled ? Icons.square : Icons.square_outlined,
             color: filled ? Colors.amber : Colors.white70,
             size: 22,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One background-colour choice for a [TextAnnotation] (WORK-0034).
+/// [color] null means "no background", drawn as a slashed circle rather
+/// than an empty swatch so "this clears it" reads as a deliberate
+/// option, not a missing one.
+class _TextBackgroundSwatch extends StatelessWidget {
+  const _TextBackgroundSwatch({
+    required this.color,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final Color? color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: 'Text background',
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            minWidth: kMinimumTouchTarget,
+            minHeight: kMinimumTouchTarget,
+          ),
+          child: Center(
+            child: Container(
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                color: color ?? Colors.transparent,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: selected ? Colors.amber : Colors.white38,
+                  width: selected ? 2.5 : 1,
+                ),
+              ),
+              child: color == null
+                  ? const Icon(Icons.block, color: Colors.white54, size: 16)
+                  : null,
+            ),
           ),
         ),
       ),

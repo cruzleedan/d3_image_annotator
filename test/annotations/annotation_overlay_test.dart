@@ -631,4 +631,214 @@ void main() {
       },
     );
   });
+
+  group('text annotations (WORK-0034)', () {
+    testWidgets('tapping empty space with the text tool opens a field, '
+        'not a drag draft', (tester) async {
+      final c = await pumpOverlay(tester, tool: AnnotationTool.text);
+
+      await tester.tapAt(at(0.3, 0.3));
+      await tester.pump();
+
+      expect(find.byType(TextField), findsOneWidget);
+      expect(c.annotations, isEmpty,
+          reason: 'nothing commits until the field is submitted');
+    });
+
+    testWidgets('submitting text commits a TextAnnotation and selects it', (
+      tester,
+    ) async {
+      final c = await pumpOverlay(tester, tool: AnnotationTool.text);
+
+      await tester.tapAt(at(0.3, 0.3));
+      await tester.pump();
+      await tester.enterText(find.byType(TextField), 'hello');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      expect(c.annotations, hasLength(1));
+      final placed = c.annotations.single as TextAnnotation;
+      expect(placed.text, 'hello');
+      expect(placed.position.x, closeTo(0.3, 0.05));
+      expect(placed.position.y, closeTo(0.3, 0.05));
+      expect(c.selectedId, placed.id);
+      expect(find.byType(TextField), findsNothing,
+          reason: 'the field closes once committed');
+    });
+
+    testWidgets('an empty submit discards without creating an annotation', (
+      tester,
+    ) async {
+      final c = await pumpOverlay(tester, tool: AnnotationTool.text);
+
+      await tester.tapAt(at(0.3, 0.3));
+      await tester.pump();
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      expect(c.annotations, isEmpty);
+      expect(find.byType(TextField), findsNothing);
+    });
+
+    testWidgets('a whitespace-only submit is treated as empty', (
+      tester,
+    ) async {
+      final c = await pumpOverlay(tester, tool: AnnotationTool.text);
+
+      await tester.tapAt(at(0.3, 0.3));
+      await tester.pump();
+      await tester.enterText(find.byType(TextField), '   ');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      expect(c.annotations, isEmpty);
+    });
+
+    testWidgets(
+      'committing text is undoable, and undoing removes it entirely',
+      (tester) async {
+        final c = await pumpOverlay(tester, tool: AnnotationTool.text);
+
+        await tester.tapAt(at(0.3, 0.3));
+        await tester.pump();
+        await tester.enterText(find.byType(TextField), 'hello');
+        await tester.testTextInput.receiveAction(TextInputAction.done);
+        await tester.pumpAndSettle();
+
+        expect(c.annotations, hasLength(1));
+        c.undo();
+        expect(c.annotations, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'tapping an already-selected text annotation re-opens the field '
+      'pre-filled with its current text',
+      (tester) async {
+        const existing = TextAnnotation(
+          id: 'target',
+          style: AnnotationStyle(),
+          position: NormalizedPoint(0.3, 0.3),
+          text: 'original',
+        );
+        final controller = AnnotationController()..add(existing);
+        controller.select('target');
+        await pumpOverlay(
+          tester,
+          tool: AnnotationTool.rectangle,
+          controller: controller,
+        );
+
+        await tester.tapAt(at(0.365, 0.309));
+        await tester.pump();
+
+        final field = tester.widget<TextField>(find.byType(TextField));
+        expect(field.controller?.text, 'original');
+      },
+    );
+
+    testWidgets(
+      'submitting a re-edit updates the text as one undo step, keeping '
+      'position and style',
+      (tester) async {
+        const existing = TextAnnotation(
+          id: 'target',
+          style: AnnotationStyle(color: Color(0xFF00FF00)),
+          position: NormalizedPoint(0.3, 0.3),
+          text: 'original',
+        );
+        final controller = AnnotationController()..add(existing);
+        controller.select('target');
+        await pumpOverlay(
+          tester,
+          tool: AnnotationTool.rectangle,
+          controller: controller,
+        );
+
+        await tester.tapAt(at(0.365, 0.309));
+        await tester.pump();
+        await tester.enterText(find.byType(TextField), 'updated');
+        await tester.testTextInput.receiveAction(TextInputAction.done);
+        await tester.pumpAndSettle();
+
+        expect(controller.annotations, hasLength(1),
+            reason: 'editing must not create a second annotation');
+        final edited = controller.annotations.single as TextAnnotation;
+        expect(edited.text, 'updated');
+        expect(edited.position, existing.position);
+        expect(edited.style, existing.style);
+
+        controller.undo();
+        expect(
+          (controller.annotations.single as TextAnnotation).text,
+          'original',
+          reason: 'a re-edit must be a single undo step',
+        );
+      },
+    );
+
+    testWidgets('text can be deleted via the floating x, undoably', (
+      tester,
+    ) async {
+      const existing = TextAnnotation(
+        id: 'target',
+        style: AnnotationStyle(),
+        position: NormalizedPoint(0.3, 0.3),
+        text: 'hello',
+      );
+      final controller = AnnotationController()..add(existing);
+      controller.select('target');
+      await pumpOverlay(
+        tester,
+        tool: AnnotationTool.rectangle,
+        controller: controller,
+      );
+
+      await tester.tap(find.byTooltip('Delete'));
+      await tester.pumpAndSettle();
+
+      expect(controller.annotations, isEmpty);
+      controller.undo();
+      expect(controller.annotations.single.id, 'target');
+    });
+
+    testWidgets('text can be rotated via the rotation handle', (
+      tester,
+    ) async {
+      const existing = TextAnnotation(
+        id: 'target',
+        style: AnnotationStyle(),
+        position: NormalizedPoint(0.3, 0.3),
+        text: 'hello',
+      );
+      final controller = AnnotationController()..add(existing);
+      controller.select('target');
+      await pumpOverlay(
+        tester,
+        tool: AnnotationTool.rectangle,
+        controller: controller,
+      );
+
+      final rotateHandle = gripPositionsInPixels(
+        existing,
+        Rect.fromLTWH(
+          contentLeft,
+          0,
+          contentWidth,
+          overlaySize.height,
+        ),
+        ImageTransform.identity,
+      )[AnnotationGrip.rotate]!;
+
+      final gesture = await tester.startGesture(rotateHandle);
+      await gesture.moveBy(const Offset(0, -60));
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      final rotated = controller.annotations.single as TextAnnotation;
+      expect(rotated.rotation, isNot(0.0));
+      expect(rotated.position, existing.position,
+          reason: 'rotating must not move the anchor position');
+    });
+  });
 }

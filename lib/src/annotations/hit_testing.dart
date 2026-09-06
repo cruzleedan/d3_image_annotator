@@ -38,6 +38,29 @@ Annotation? hitTestAnnotations(
   final tolerance = normalizedTolerance(hitSlopPixels, contentRect);
   for (var i = annotations.length - 1; i >= 0; i--) {
     final annotation = annotations[i];
+
+    // Text's real on-screen box needs a TextPainter layout pass --
+    // unlike every other type, [hitTest]'s normalized-space geometry
+    // cannot express it exactly (see TextAnnotation.bounds), so this
+    // tests directly in pixel space rather than through the shared
+    // per-type switch whenever a pixel position is available. Rotation
+    // -aware the same way a rotated rect/circle is: the *unrotated*
+    // mapped box is rotated into on-screen corners and tested as a
+    // polygon, rather than inverse-rotating the tap the way
+    // [unrotatedEquivalentPoint] does -- equivalent for a hit test,
+    // and avoids a round trip back through the normalized pipeline for
+    // a type whose normalized-space geometry is only ever a coarse
+    // estimate to begin with.
+    if (annotation is TextAnnotation && pixelPosition != null) {
+      final unrotated = textBoundsInPixels(annotation, contentRect, transform);
+      final corners = rotatedCorners(
+        unrotated.inflate(hitSlopPixels),
+        annotation.rotation,
+      );
+      if (_containsPoint(corners, pixelPosition)) return annotation;
+      continue;
+    }
+
     final testPoint = pixelPosition == null
         ? point
         : unrotatedEquivalentPoint(
@@ -110,6 +133,20 @@ bool hitTest(
         }
       }
       return false;
+
+    case TextAnnotation():
+      // Uses the coarse `bounds` estimate -- adequate for a caller
+      // working in pure normalized space with no pixel context. The
+      // real, exact on-screen box is only reachable in pixel space (it
+      // needs a `TextPainter` layout pass), which is what
+      // [hitTestAnnotations] uses instead whenever a [pixelPosition] is
+      // available -- the overwhelmingly common case, since every real
+      // gesture in this package supplies one.
+      return annotation.bounds.containsWithTolerance(
+        point,
+        toleranceX,
+        toleranceY,
+      );
   }
 }
 
@@ -165,4 +202,24 @@ bool _nearSegment(
   final dx = px - closestX;
   final dy = py - closestY;
   return dx * dx + dy * dy <= 1;
+}
+
+/// Whether [point] lies inside the polygon described by [corners], via
+/// the standard even-odd ray-casting test.
+///
+/// Only ever called with the four corners [rotatedCorners] returns (a
+/// possibly-rotated rectangle), never an arbitrary polygon -- general
+/// enough for that shape without needing anything more specialised for
+/// a quadrilateral specifically.
+bool _containsPoint(List<Offset> corners, Offset point) {
+  var inside = false;
+  for (var i = 0, j = corners.length - 1; i < corners.length; j = i++) {
+    final a = corners[i];
+    final b = corners[j];
+    final crosses = (a.dy > point.dy) != (b.dy > point.dy);
+    if (!crosses) continue;
+    final xAtY = (b.dx - a.dx) * (point.dy - a.dy) / (b.dy - a.dy) + a.dx;
+    if (point.dx < xAtY) inside = !inside;
+  }
+  return inside;
 }

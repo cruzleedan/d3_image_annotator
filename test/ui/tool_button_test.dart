@@ -323,11 +323,19 @@ void main() {
       points: const [NormalizedPoint(0.1, 0.1), NormalizedPoint(0.5, 0.5)],
     );
 
+    const text = TextAnnotation(
+      id: 't',
+      style: AnnotationStyle(),
+      position: NormalizedPoint(0.1, 0.1),
+      text: 'hello',
+    );
+
     for (final entry in {
       'rectangle': rect(),
       'circle': circle(),
       'arrow': arrow,
       'freehand': freehand(),
+      'text': text,
     }.entries) {
       testWidgets(
         'tapping a color swatch restyles the selected ${entry.key}, '
@@ -371,6 +379,91 @@ void main() {
       await pumpRestyle(tester, freehand());
       expect(find.bySemanticsLabel('Fill'), findsNothing);
     });
+
+    testWidgets('no fill toggle is offered for text (WORK-0034)', (
+      tester,
+    ) async {
+      await pumpRestyle(tester, text);
+      expect(find.bySemanticsLabel('Fill'), findsNothing);
+    });
+
+    testWidgets(
+      'text shows font-size and background controls, not stroke width',
+      (tester) async {
+        await pumpRestyle(tester, text);
+        expect(find.bySemanticsLabel('Font size'), findsWidgets);
+        expect(find.bySemanticsLabel('Text background'), findsWidgets);
+        expect(find.bySemanticsLabel('Stroke width'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'non-text types show stroke width, not font-size/background '
+      'controls',
+      (tester) async {
+        await pumpRestyle(tester, rect());
+        expect(find.bySemanticsLabel('Stroke width'), findsWidgets);
+        expect(find.bySemanticsLabel('Font size'), findsNothing);
+        expect(find.bySemanticsLabel('Text background'), findsNothing);
+      },
+    );
+
+    testWidgets('tapping a font-size swatch changes fontSize, undoably', (
+      tester,
+    ) async {
+      final controller = await pumpRestyle(tester, text);
+      final before = controller.annotations.single.style.fontSize;
+
+      final swatches = find.bySemanticsLabel('Font size');
+      await tester.tap(swatches.at(2));
+      await tester.pumpAndSettle();
+
+      final after = controller.annotations.single.style.fontSize;
+      expect(after, isNot(before));
+
+      controller.undo();
+      expect(controller.annotations.single.style.fontSize, before);
+    });
+
+    testWidgets(
+      'tapping a background swatch changes backgroundColor, undoably',
+      (tester) async {
+        final controller = await pumpRestyle(tester, text);
+        expect(controller.annotations.single.style.backgroundColor, isNull);
+
+        final swatches = find.bySemanticsLabel('Text background');
+        await tester.tap(swatches.at(1));
+        await tester.pumpAndSettle();
+
+        expect(
+          controller.annotations.single.style.backgroundColor,
+          isNotNull,
+        );
+
+        controller.undo();
+        expect(controller.annotations.single.style.backgroundColor, isNull);
+      },
+    );
+
+    testWidgets(
+      'tapping the "no background" swatch clears backgroundColor',
+      (tester) async {
+        final withBackground = text.copyWithStyle(
+          text.style.copyWith(backgroundColor: Colors.black),
+        );
+        final controller = await pumpRestyle(tester, withBackground);
+        expect(
+          controller.annotations.single.style.backgroundColor,
+          isNotNull,
+        );
+
+        final swatches = find.bySemanticsLabel('Text background');
+        await tester.tap(swatches.first);
+        await tester.pumpAndSettle();
+
+        expect(controller.annotations.single.style.backgroundColor, isNull);
+      },
+    );
 
     testWidgets('the fill toggle flips filled, undoably', (tester) async {
       final controller = await pumpRestyle(tester, rect());
