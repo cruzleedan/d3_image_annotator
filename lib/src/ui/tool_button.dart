@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../annotations/annotation.dart';
 import '../annotations/annotation_controller.dart';
+import '../annotations/annotation_style.dart';
 
 /// Minimum touch target, in logical pixels.
 ///
@@ -234,7 +236,7 @@ class D3CloseButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _HistoryAction(
+    return D3FloatingButton(
       icon: Icons.close,
       tooltip: tooltip,
       color: Colors.white,
@@ -267,39 +269,35 @@ class D3HistoryBar extends StatelessWidget {
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
+        // The floating × (WORK-0035) now owns "delete the selected
+        // shape" -- one control per action, not two doing the same
+        // thing in two places. This button keeps only its "clear
+        // everything, nothing selected" half, and disables rather than
+        // relabels itself while something is selected, since deleting
+        // that selection is no longer a thing this button does at all.
         final hasSelection = controller.selectedId != null;
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _HistoryAction(
+            D3FloatingButton(
               icon: Icons.undo,
               tooltip: 'Undo',
               color: foregroundColor,
               onPressed: controller.canUndo ? controller.undo : null,
             ),
-            _HistoryAction(
+            D3FloatingButton(
               icon: Icons.redo,
               tooltip: 'Redo',
               color: foregroundColor,
               onPressed: controller.canRedo ? controller.redo : null,
             ),
-            // One control for both: removes the selection when there is
-            // one, otherwise clears everything. The tooltip and tint say
-            // which, so the difference is not hidden behind a guess.
-            _HistoryAction(
-              icon: hasSelection ? Icons.delete : Icons.delete_outline,
-              tooltip: hasSelection ? 'Delete selected' : 'Clear all',
-              color: hasSelection ? Colors.redAccent : foregroundColor,
-              onPressed: controller.isEmpty
+            D3FloatingButton(
+              icon: Icons.delete_outline,
+              tooltip: 'Clear all',
+              color: foregroundColor,
+              onPressed: controller.isEmpty || hasSelection
                   ? null
-                  : () {
-                      final id = controller.selectedId;
-                      if (id != null) {
-                        controller.remove(id);
-                      } else {
-                        controller.clear();
-                      }
-                    },
+                  : controller.clear,
             ),
           ],
         );
@@ -308,8 +306,22 @@ class D3HistoryBar extends StatelessWidget {
   }
 }
 
-class _HistoryAction extends StatelessWidget {
-  const _HistoryAction({
+/// A circular icon-only button, sized to a guaranteed touch target, with
+/// no caption.
+///
+/// The undo/redo/clear/close icons here are self-evident (a familiar
+/// system glyph, or one used only once so there is nothing to confuse
+/// it with) in a way crop/straighten/mirror are not — that is what
+/// [D3ToolButton]'s caption exists for, and why this stays uncaptioned
+/// rather than duplicating that pattern.
+///
+/// Also used for floating shape controls (WORK-0035): a delete/duplicate
+/// icon sitting directly on a small selected shape has no room for a
+/// label either, and the same "obvious from the icon alone" reasoning
+/// applies to a × or a +1.
+class D3FloatingButton extends StatelessWidget {
+  const D3FloatingButton({
+    super.key,
     required this.icon,
     required this.tooltip,
     required this.color,
@@ -343,6 +355,221 @@ class _HistoryAction extends StatelessWidget {
               color: onPressed == null ? Colors.white24 : color,
               size: 22,
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The colour swatches [D3RestyleBar] offers.
+///
+/// A fixed, small palette rather than a full colour picker: annotations
+/// are marks meant to stand out against a photo, and a handful of
+/// distinct, high-contrast colours serves that better than the paradox
+/// of choice a full wheel would add to what is meant to be a quick,
+/// glanceable bar.
+const List<Color> kRestyleColors = [
+  Color(0xFFFF3B30), // red -- AnnotationStyle's own default
+  Color(0xFFFFCC00), // yellow
+  Color(0xFF34C759), // green
+  Color(0xFF007AFF), // blue
+  Color(0xFFFFFFFF), // white
+];
+
+/// Stroke widths [D3RestyleBar] offers, as fractions of the image's
+/// shorter side -- see [AnnotationStyle.strokeWidth].
+const List<double> kRestyleStrokeWidths = [0.0025, 0.005, 0.01];
+
+/// Colour, stroke-width, and fill controls for the selected annotation
+/// (WORK-0035).
+///
+/// A bar, not floating controls: a colour/stroke/fill palette needs real
+/// space that floating icons near a small shape cannot give without
+/// covering it, unlike the single-icon ×/+1 controls -- decided in
+/// WORK-0035's Decision section, not an oversight that the two controls
+/// live in different places.
+///
+/// Shown only while something is selected; the caller (typically
+/// `D3AnnotatorScreen`) is responsible for that condition, the same way
+/// it already gates the crop bar.
+class D3RestyleBar extends StatelessWidget {
+  const D3RestyleBar({
+    super.key,
+    required this.controller,
+    required this.selected,
+  });
+
+  final AnnotationController controller;
+
+  /// The annotation this bar edits. Passed explicitly rather than read
+  /// from `controller.selected` internally so a caller that has already
+  /// fetched it (to decide whether to show this bar at all) does not
+  /// have to fetch it twice, and so this widget has no way to render
+  /// with a stale idea of which annotation it is editing.
+  final Annotation selected;
+
+  /// Fill has no meaning for a shape with no interior -- honouring it
+  /// would either do nothing (arrows are always stroked, per
+  /// `annotation_painter.dart`) or silently vanish a freehand stroke
+  /// behind a fill that was never drawn.
+  bool get _supportsFill =>
+      selected is RectangleAnnotation || selected is CircleAnnotation;
+
+  void _apply(AnnotationStyle style) {
+    controller.update(selected.id, selected.copyWithStyle(style));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final style = selected.style;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final color in kRestyleColors)
+            _ColorSwatch(
+              color: color,
+              selected: style.color.toARGB32() == color.toARGB32(),
+              onTap: () => _apply(style.copyWith(color: color)),
+            ),
+          const SizedBox(width: 8),
+          for (final width in kRestyleStrokeWidths)
+            _StrokeWidthSwatch(
+              strokeWidth: width,
+              selected: style.strokeWidth == width,
+              onTap: () => _apply(style.copyWith(strokeWidth: width)),
+            ),
+          if (_supportsFill) ...[
+            const SizedBox(width: 8),
+            _FillToggle(
+              filled: style.filled,
+              onTap: () => _apply(style.copyWith(filled: !style.filled)),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ColorSwatch extends StatelessWidget {
+  const _ColorSwatch({
+    required this.color,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final Color color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: 'Color',
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            minWidth: kMinimumTouchTarget,
+            minHeight: kMinimumTouchTarget,
+          ),
+          child: Center(
+            child: Container(
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                color: color,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: selected ? Colors.white : Colors.white38,
+                  width: selected ? 2.5 : 1,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StrokeWidthSwatch extends StatelessWidget {
+  const _StrokeWidthSwatch({
+    required this.strokeWidth,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final double strokeWidth;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    // Dot size communicates relative weight directly, rather than
+    // making the user compare numbers they cannot see the effect of.
+    final dotSize = 6 + strokeWidth * 800;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: 'Stroke width',
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            minWidth: kMinimumTouchTarget,
+            minHeight: kMinimumTouchTarget,
+          ),
+          child: Center(
+            child: Container(
+              width: dotSize,
+              height: dotSize,
+              decoration: BoxDecoration(
+                color: selected ? Colors.amber : Colors.white70,
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FillToggle extends StatelessWidget {
+  const _FillToggle({required this.filled, required this.onTap});
+
+  final bool filled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      selected: filled,
+      label: 'Fill',
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            minWidth: kMinimumTouchTarget,
+            minHeight: kMinimumTouchTarget,
+          ),
+          child: Icon(
+            filled ? Icons.square : Icons.square_outlined,
+            color: filled ? Colors.amber : Colors.white70,
+            size: 22,
           ),
         ),
       ),

@@ -1,3 +1,5 @@
+import 'dart:ui' show Color;
+
 import 'package:d3_image_annotator/d3_image_annotator.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -72,6 +74,149 @@ void main() {
       c.remove('a');
 
       expect(notifications, 2);
+    });
+  });
+
+  group('AnnotationController.duplicateSelected (WORK-0035)', () {
+    test('adds a copy and selects it, not the original', () {
+      final c = AnnotationController()..add(_rect('a'));
+      c.select('a');
+
+      c.duplicateSelected('a-copy');
+
+      expect(c.annotations.map((a) => a.id), ['a', 'a-copy']);
+      expect(c.selectedId, 'a-copy');
+    });
+
+    test('is a no-op when nothing is selected', () {
+      final c = AnnotationController()..add(_rect('a'));
+
+      c.duplicateSelected('a-copy');
+
+      expect(c.annotations, hasLength(1));
+    });
+
+    test('is one undo step', () {
+      final c = AnnotationController()..add(_rect('a'));
+      c.select('a');
+      final undoDepthBefore = c.canUndo;
+
+      c.duplicateSelected('a-copy');
+      c.undo();
+
+      expect(c.annotations.map((a) => a.id), ['a']);
+      expect(c.canUndo, undoDepthBefore,
+          reason: 'exactly one undo step was consumed, no more');
+    });
+
+    test('the duplicate is offset so it is not exactly under the original',
+        () {
+      final c = AnnotationController()..add(_rect('a'));
+      c.select('a');
+
+      c.duplicateSelected('a-copy');
+
+      final original = c.annotations.first as RectangleAnnotation;
+      final copy = c.annotations.last as RectangleAnnotation;
+      expect(copy.rect, isNot(original.rect));
+    });
+  });
+
+  group('duplicateAnnotation (WORK-0035)', () {
+    test('preserves style and geometry, offset by a small amount', () {
+      const style = AnnotationStyle(
+        color: Color(0xFF00A0FF),
+        strokeWidth: 0.02,
+        filled: true,
+      );
+      final original = RectangleAnnotation(
+        id: 'r1',
+        style: style,
+        rect: NormalizedRect(left: 0.1, top: 0.1, right: 0.3, bottom: 0.3),
+      );
+
+      final copy = duplicateAnnotation(original, 'r2') as RectangleAnnotation;
+
+      expect(copy.id, 'r2');
+      expect(copy.style, style);
+      expect(copy.rect.width, closeTo(original.rect.width, 1e-9));
+      expect(copy.rect.height, closeTo(original.rect.height, 1e-9));
+      expect(copy.rect.left, greaterThan(original.rect.left),
+          reason: 'the duplicate is offset, not identical');
+    });
+
+    test('preserves rotation', () {
+      final original = CircleAnnotation(
+        id: 'c1',
+        style: const AnnotationStyle(),
+        rect: NormalizedRect(left: 0.0, top: 0.0, right: 0.5, bottom: 0.5),
+        rotation: 0.8,
+      );
+
+      final copy = duplicateAnnotation(original, 'c2') as CircleAnnotation;
+
+      expect(copy.rotation, 0.8,
+          reason: 'duplicating a rotated shape must not silently reset '
+              'its rotation to zero');
+    });
+
+    test('preserves an arrow\'s direction', () {
+      const original = ArrowAnnotation(
+        id: 'a1',
+        style: AnnotationStyle(),
+        start: NormalizedPoint(0.1, 0.1),
+        end: NormalizedPoint(0.4, 0.6),
+      );
+
+      final copy = duplicateAnnotation(original, 'a2') as ArrowAnnotation;
+
+      final originalDx = original.end.x - original.start.x;
+      final originalDy = original.end.y - original.start.y;
+      final copyDx = copy.end.x - copy.start.x;
+      final copyDy = copy.end.y - copy.start.y;
+      expect(copyDx, closeTo(originalDx, 1e-9));
+      expect(copyDy, closeTo(originalDy, 1e-9));
+    });
+
+    test('preserves the shape of a freehand stroke, offset uniformly', () {
+      // "Preserves" means the stroke's shape (each point's position
+      // relative to the others), not identical coordinates -- every
+      // point is offset by the same amount, same as the other shapes.
+      final original = FreehandAnnotation(
+        id: 'f1',
+        style: const AnnotationStyle(),
+        points: const [
+          NormalizedPoint(0.1, 0.1),
+          NormalizedPoint(0.2, 0.15),
+          NormalizedPoint(0.3, 0.1),
+        ],
+      );
+
+      final copy = duplicateAnnotation(original, 'f2') as FreehandAnnotation;
+
+      expect(copy.points, hasLength(3));
+      for (var i = 0; i < 3; i++) {
+        expect(copy.points[i].x, closeTo(original.points[i].x + 0.02, 1e-9));
+        expect(copy.points[i].y, closeTo(original.points[i].y + 0.02, 1e-9));
+      }
+    });
+
+    test('near an edge, falls back to an unoffset copy rather than '
+        'refusing to duplicate at all', () {
+      // A shape hard against the image's bottom-right corner: the
+      // default offset would push it out of [0,1].
+      final original = RectangleAnnotation(
+        id: 'r1',
+        style: const AnnotationStyle(),
+        rect: NormalizedRect(left: 0.9, top: 0.9, right: 1.0, bottom: 1.0),
+      );
+
+      final copy = duplicateAnnotation(original, 'r2') as RectangleAnnotation;
+
+      // Falls back to the exact original position rather than being
+      // refused -- duplicating is not a gesture the user can retry with
+      // a smaller distance, unlike a drag.
+      expect(copy.rect, original.rect);
     });
   });
 

@@ -4,8 +4,6 @@ import 'dart:ui' show PathMetric;
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
-import '../coordinates/normalized_point.dart';
-import '../coordinates/normalized_rect.dart';
 import '../geometry/image_transform.dart';
 import 'annotation.dart';
 import 'annotation_handles.dart';
@@ -81,28 +79,30 @@ void paintAnnotations(
       case RectangleAnnotation(:final rect, :final rotation):
         _drawRotated(
           canvas,
-          _mapRect(rect, contentRect, transform),
+          mapRectToPixels(rect, contentRect, transform),
           rotation,
           (r) => canvas.drawRect(r, paint),
         );
       case CircleAnnotation(:final rect, :final rotation):
         _drawRotated(
           canvas,
-          _mapRect(rect, contentRect, transform),
+          mapRectToPixels(rect, contentRect, transform),
           rotation,
           (r) => canvas.drawOval(r, paint),
         );
       case ArrowAnnotation(:final start, :final end):
         _paintArrow(
           canvas,
-          _mapOffset(start, contentRect, transform),
-          _mapOffset(end, contentRect, transform),
+          mapPointToPixels(start, contentRect, transform),
+          mapPointToPixels(end, contentRect, transform),
           paint,
         );
       case FreehandAnnotation(:final points):
         _paintFreehand(
           canvas,
-          [for (final p in points) _mapOffset(p, contentRect, transform)],
+          [
+            for (final p in points) mapPointToPixels(p, contentRect, transform),
+          ],
           paint,
         );
     }
@@ -110,7 +110,8 @@ void paintAnnotations(
     if (annotation.id == selectedId) {
       _paintSelection(
         canvas,
-        _mapRect(annotation.bounds, contentRect, transform),
+        mapRectToPixels(annotation.bounds, contentRect, transform),
+        rotationOf(annotation),
         paint,
       );
       _paintHandles(canvas, annotation, contentRect, transform);
@@ -118,44 +119,6 @@ void paintAnnotations(
   }
 
   if (transform.cropRect != null) canvas.restore();
-}
-
-/// Projects a normalized point through [transform] into widget space.
-Offset _mapOffset(
-  NormalizedPoint point,
-  Rect contentRect,
-  ImageTransform transform,
-) {
-  final mapped = transform.mapPoint(point);
-  return Offset(
-    contentRect.left + mapped.x * contentRect.width,
-    contentRect.top + mapped.y * contentRect.height,
-  );
-}
-
-/// Projects a normalized rect through [transform].
-///
-/// Built from the mapped corners rather than mapping width and height,
-/// since a 90-degree rotation swaps the axes and would otherwise produce
-/// a rect of the wrong shape. `Rect.fromPoints` re-normalises the corner
-/// order, so a rotation that puts left past right still yields a valid
-/// rect.
-Rect _mapRect(
-  NormalizedRect rect,
-  Rect contentRect,
-  ImageTransform transform,
-) {
-  final a = _mapOffset(
-    NormalizedPoint(rect.left, rect.top),
-    contentRect,
-    transform,
-  );
-  final b = _mapOffset(
-    NormalizedPoint(rect.right, rect.bottom),
-    contentRect,
-    transform,
-  );
-  return Rect.fromPoints(a, b);
 }
 
 /// Draws [mapped] via [draw], rotated by [rotationRadians] about its own
@@ -285,28 +248,50 @@ void _paintHandles(
     ..color = const Color(0xDD000000)
     ..strokeWidth = 1.5
     ..style = PaintingStyle.stroke;
+  // Distinct fill so the rotation handle reads as "does something
+  // different" at a glance, not just another resize dot in a new spot
+  // (WORK-0035).
+  final rotateFill = Paint()..color = const Color(0xFF4A90D9);
 
-  for (final point in gripsOf(annotation).values) {
-    final at = _mapOffset(point, contentRect, transform);
-    canvas.drawCircle(at, kHandleRadius, fill);
-    canvas.drawCircle(at, kHandleRadius, edge);
-  }
+  gripPositionsInPixels(annotation, contentRect, transform).forEach((
+    grip,
+    at,
+  ) {
+    if (grip == AnnotationGrip.rotate) {
+      canvas.drawCircle(at, kHandleRadius, rotateFill);
+      canvas.drawCircle(at, kHandleRadius, edge);
+    } else {
+      canvas.drawCircle(at, kHandleRadius, fill);
+      canvas.drawCircle(at, kHandleRadius, edge);
+    }
+  });
 }
 
-void _paintSelection(Canvas canvas, Rect bounds, Paint source) {
+void _paintSelection(
+  Canvas canvas,
+  Rect bounds,
+  double rotationRadians,
+  Paint source,
+) {
   final handle = Paint()
     ..color = source.color.withValues(alpha: 0.9)
     ..strokeWidth = source.strokeWidth * 0.6
     ..style = PaintingStyle.stroke;
 
   final inflated = bounds.inflate(source.strokeWidth * 2);
-  _paintDashedRect(canvas, inflated, handle);
+  // Inflate first, in the shape's own unrotated frame, then rotate the
+  // inflated corners -- inflating an already-rotated quadrilateral by a
+  // uniform pixel amount is not the same shape as a rotated, uniformly
+  // -inflated rectangle, and the latter is what "the outline sits a
+  // constant distance outside the shape at every angle" actually means.
+  final corners = rotatedCorners(inflated, rotationRadians);
+  _paintDashedPolygon(canvas, corners, handle);
 }
 
-void _paintDashedRect(Canvas canvas, Rect rect, Paint paint) {
+void _paintDashedPolygon(Canvas canvas, List<Offset> corners, Paint paint) {
   const dash = 8.0;
   const gap = 5.0;
-  final path = Path()..addRect(rect);
+  final path = Path()..addPolygon(corners, true);
   for (final PathMetric metric in path.computeMetrics()) {
     var distance = 0.0;
     while (distance < metric.length) {
