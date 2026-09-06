@@ -442,55 +442,64 @@ class D3RestyleBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = selected.style;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final color in kRestyleColors)
-            _ColorSwatch(
-              color: color,
-              selected: style.color.toARGB32() == color.toARGB32(),
-              onTap: () => _apply(style.copyWith(color: color)),
-            ),
-          const SizedBox(width: 8),
-          if (_isText) ...[
-            for (final fontSize in kRestyleFontSizes)
-              _SizeSwatch(
-                value: fontSize,
-                label: 'Font size',
-                selected: style.fontSize == fontSize,
-                onTap: () => _apply(style.copyWith(fontSize: fontSize)),
+    // Scrolls rather than wraps or shrinks, same reasoning as
+    // D3ToolBar: a text annotation's row (colour + font size +
+    // background swatches) is long enough on a narrow phone to overflow
+    // a fixed-width row, and shrinking the swatches would break their
+    // touch-target guarantee.
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: SizedBox(
+        height: kMinimumTouchTarget,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final color in kRestyleColors)
+              _ColorSwatch(
+                color: color,
+                selected: style.color.toARGB32() == color.toARGB32(),
+                onTap: () => _apply(style.copyWith(color: color)),
               ),
             const SizedBox(width: 8),
-            for (final background in kRestyleTextBackgrounds)
-              _TextBackgroundSwatch(
-                color: background,
-                selected: style.backgroundColor?.toARGB32() ==
-                    background?.toARGB32(),
-                onTap: () => _apply(
-                  background == null
-                      ? style.copyWith(clearBackgroundColor: true)
-                      : style.copyWith(backgroundColor: background),
+            if (_isText) ...[
+              for (final fontSize in kRestyleFontSizes)
+                _SizeSwatch(
+                  value: fontSize,
+                  label: 'Font size',
+                  selected: style.fontSize == fontSize,
+                  onTap: () => _apply(style.copyWith(fontSize: fontSize)),
                 ),
-              ),
-          ] else ...[
-            for (final width in kRestyleStrokeWidths)
-              _SizeSwatch(
-                value: width,
-                label: 'Stroke width',
-                selected: style.strokeWidth == width,
-                onTap: () => _apply(style.copyWith(strokeWidth: width)),
-              ),
-            if (_supportsFill) ...[
               const SizedBox(width: 8),
-              _FillToggle(
-                filled: style.filled,
-                onTap: () => _apply(style.copyWith(filled: !style.filled)),
-              ),
+              for (final background in kRestyleTextBackgrounds)
+                _TextBackgroundSwatch(
+                  color: background,
+                  selected:
+                      style.backgroundColor?.toARGB32() ==
+                      background?.toARGB32(),
+                  onTap: () => _apply(
+                    background == null
+                        ? style.copyWith(clearBackgroundColor: true)
+                        : style.copyWith(backgroundColor: background),
+                  ),
+                ),
+            ] else ...[
+              for (final width in kRestyleStrokeWidths)
+                _SizeSwatch(
+                  value: width,
+                  label: 'Stroke width',
+                  selected: style.strokeWidth == width,
+                  onTap: () => _apply(style.copyWith(strokeWidth: width)),
+                ),
+              if (_supportsFill) ...[
+                const SizedBox(width: 8),
+                _FillToggle(
+                  filled: style.filled,
+                  onTap: () => _apply(style.copyWith(filled: !style.filled)),
+                ),
+              ],
             ],
           ],
-        ],
+        ),
       ),
     );
   }
