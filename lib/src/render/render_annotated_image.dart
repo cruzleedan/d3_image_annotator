@@ -126,6 +126,98 @@ Future<Uint8List> renderAnnotatedImage({
   }
 }
 
+/// Renders [annotations] onto either a real image or a plain colour
+/// fill, and returns encoded bytes (WORK-0036).
+///
+/// Exactly one of [imageBytes] or [color] must be given -- this mirrors
+/// `AnnotationBackground` at the widget layer without reusing that type
+/// directly, since its image case wraps an `ImageProvider` and this
+/// function needs already-read bytes for the same reason
+/// [renderAnnotatedImage] does (a provider depends on Flutter's image
+/// cache and binding, which only makes progress while frames are being
+/// pumped, and hangs forever awaited outside a widget tree).
+///
+/// [size] gives the canvas's pixel dimensions for the colour case, where
+/// there is no image to measure one from -- the same explicit-size
+/// decision `AnnotationOverlay`'s no-image mode uses. It is required
+/// unconditionally (not only for `color`) so callers do not need two
+/// different call shapes depending on which background kind they have;
+/// for the image case it is asserted against the decoded image's actual
+/// size instead of trusted blindly, since a caller passing the wrong
+/// size for a real image would otherwise silently mis-scale every
+/// annotation without any signal something was wrong.
+///
+/// The colour case works by synthesizing a solid-fill [ui.Image] at
+/// [size] and running it through the same [renderCompositedImage]
+/// pipeline the image case uses, chosen over a second colour-specific
+/// compositing path so stroke scaling, clipping, and mirroring/rotation
+/// of the background stay correct by construction for both cases with
+/// no duplicated logic to keep in sync (WORK-0036's Decision section) --
+/// at the cost of one bounded allocation per render that a caller who
+/// only ever uses `color` backgrounds pays and a caller who only ever
+/// uses `imageBytes` does not.
+Future<Uint8List> renderAnnotatedCanvas({
+  Uint8List? imageBytes,
+  Color? color,
+  required Size size,
+  required List<Annotation> annotations,
+  ImageTransform transform = ImageTransform.identity,
+  RenderOptions options = const RenderOptions(),
+}) async {
+  assert(
+    (imageBytes == null) != (color == null),
+    'exactly one of imageBytes or color must be given',
+  );
+
+  final ui.Image source = imageBytes != null
+      ? await decodeSourceImage(imageBytes)
+      : await synthesizeSolidImage(color!, size);
+
+  if (imageBytes != null) {
+    assert(
+      source.width == size.width.round() &&
+          source.height == size.height.round(),
+      'size ($size) does not match the decoded image '
+      '(${source.width}x${source.height})',
+    );
+  }
+
+  try {
+    return await renderCompositedImage(
+      source: source,
+      annotations: annotations,
+      transform: transform,
+      options: options,
+    );
+  } finally {
+    source.dispose();
+  }
+}
+
+/// A solid-fill [ui.Image] of [size], filled with [color].
+///
+/// The synthetic source [renderAnnotatedCanvas] composites a colour
+/// background onto -- exported so a caller building a custom render
+/// pipeline (as `renderAnnotatedImages`'s batch API might one day extend
+/// to colour backgrounds too) can reuse the same synthesis rather than
+/// duplicating it.
+Future<ui.Image> synthesizeSolidImage(Color color, Size size) async {
+  final width = size.width.round();
+  final height = size.height.round();
+  final recorder = ui.PictureRecorder();
+  final canvas = ui.Canvas(recorder);
+  canvas.drawRect(
+    Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+    Paint()..color = color,
+  );
+  final picture = recorder.endRecording();
+  try {
+    return await picture.toImage(width, height);
+  } finally {
+    picture.dispose();
+  }
+}
+
 /// A pluggable PNG encoder: raw RGBA bytes in, encoded bytes out.
 ///
 /// Package-private and not exported. Its only reason to exist is

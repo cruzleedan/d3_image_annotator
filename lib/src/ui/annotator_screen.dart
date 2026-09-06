@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../annotations/annotation_binding.dart';
 import '../annotations/annotation_controller.dart';
 import '../annotations/annotation_tool.dart';
 import '../coordinates/normalized_rect.dart';
 import '../geometry/image_fit.dart';
+import '../viewer/annotation_background.dart';
 import '../viewer/image_annotator.dart';
 import 'tool_button.dart';
 
@@ -31,8 +33,8 @@ enum AnnotatorToolGroup {
 class D3AnnotatorScreen extends StatefulWidget {
   const D3AnnotatorScreen({
     super.key,
-    required this.image,
-    required this.imageSize,
+    required this.background,
+    required this.canvasSize,
     required this.controller,
     this.onClose,
     this.onDone,
@@ -40,10 +42,21 @@ class D3AnnotatorScreen extends StatefulWidget {
     this.fit = ImageFit.contain,
     this.backgroundColor = Colors.black,
     this.initialTool = AnnotationTool.rectangle,
+    this.sourceImageSize,
+    this.onBindingChanged,
   });
 
-  final ImageProvider image;
-  final Size imageSize;
+  /// What sits behind the annotations: a real image, or a plain colour
+  /// fill (WORK-0036). Swappable at runtime by rebuilding with a new
+  /// value; existing annotations are unaffected since they live in
+  /// normalized space independent of any particular background.
+  final AnnotationBackground background;
+
+  /// The canvas's pixel dimensions -- see `D3ImageAnnotator.canvasSize`
+  /// for why this is always explicit rather than resolved from a
+  /// decoded image or this screen's own layout.
+  final Size canvasSize;
+
   final AnnotationController controller;
 
   /// Called when the user taps the close button.
@@ -65,6 +78,14 @@ class D3AnnotatorScreen extends StatefulWidget {
   final Color backgroundColor;
   final AnnotationTool initialTool;
 
+  /// See `D3ImageAnnotator.sourceImageSize` -- passed straight through
+  /// so this screen's background switches (e.g. a "replace photo"
+  /// action the host app wires up) can be classified the same way.
+  final Size? sourceImageSize;
+
+  /// See `D3ImageAnnotator.onBindingChanged`.
+  final ValueChanged<AnnotationBinding>? onBindingChanged;
+
   @override
   State<D3AnnotatorScreen> createState() => _D3AnnotatorScreenState();
 }
@@ -76,6 +97,30 @@ class _D3AnnotatorScreenState extends State<D3AnnotatorScreen> {
   AnnotatorToolGroup _group = AnnotatorToolGroup.draw;
   bool _cropping = false;
   NormalizedRect? _pendingCrop;
+
+  /// Whether the Crop/Rotate/Mirror/Reset adjust group has anything to
+  /// act on -- decided in WORK-0036: hidden entirely for a colour
+  /// background, since there is no image to reorient and showing those
+  /// controls would invite a user to try reorienting a fill that visibly
+  /// does not change.
+  bool get _showAdjustGroup => colorOf(widget.background) == null;
+
+  @override
+  void didUpdateWidget(D3AnnotatorScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A live switch to a colour background while the adjust group (or
+    // crop mode reached through it) was showing leaves both stranded on
+    // a background that no longer has anything for them to act on --
+    // fall back to the draw group and cancel any in-progress crop
+    // rather than leave a crop frame floating over a plain fill.
+    if (!_showAdjustGroup && widget.background != oldWidget.background) {
+      _group = AnnotatorToolGroup.draw;
+      if (_cropping) {
+        _cropping = false;
+        _pendingCrop = null;
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -120,8 +165,8 @@ class _D3AnnotatorScreenState extends State<D3AnnotatorScreen> {
               // -- reported on-device.
               child: ClipRect(
                 child: D3ImageAnnotator(
-                  image: widget.image,
-                  imageSize: widget.imageSize,
+                  background: widget.background,
+                  canvasSize: widget.canvasSize,
                   controller: widget.controller,
                   tool: _tool,
                   fit: widget.fit,
@@ -129,6 +174,8 @@ class _D3AnnotatorScreenState extends State<D3AnnotatorScreen> {
                   transformationController: _zoom,
                   cropping: _cropping,
                   onCropChanged: (rect) => _pendingCrop = rect,
+                  sourceImageSize: widget.sourceImageSize,
+                  onBindingChanged: widget.onBindingChanged,
                 ),
               ),
             ),
@@ -170,6 +217,7 @@ class _D3AnnotatorScreenState extends State<D3AnnotatorScreen> {
                   controller: widget.controller,
                   tool: _tool,
                   group: _group,
+                  showAdjustGroup: _showAdjustGroup,
                   onToolChanged: (t) => setState(() => _tool = t),
                   onGroupChanged: (g) => setState(() => _group = g),
                   onStartCrop: () => setState(() {
@@ -271,6 +319,7 @@ class _BottomBars extends StatelessWidget {
     required this.controller,
     required this.tool,
     required this.group,
+    required this.showAdjustGroup,
     required this.onToolChanged,
     required this.onGroupChanged,
     required this.onStartCrop,
@@ -279,34 +328,47 @@ class _BottomBars extends StatelessWidget {
   final AnnotationController controller;
   final AnnotationTool tool;
   final AnnotatorToolGroup group;
+
+  /// Whether the Crop/Rotate/Mirror/Reset group is offered at all --
+  /// false for a colour background (WORK-0036), which has nothing for
+  /// those controls to visibly act on.
+  final bool showAdjustGroup;
+
   final ValueChanged<AnnotationTool> onToolChanged;
   final ValueChanged<AnnotatorToolGroup> onGroupChanged;
   final VoidCallback onStartCrop;
 
   @override
   Widget build(BuildContext context) {
+    // The effective group is always draw when the adjust group isn't
+    // offered -- covers a colour background switch arriving between
+    // this widget's own build and its parent's fallback in
+    // didUpdateWidget, so a stale `group: adjust` never renders adjust
+    // tools this frame even for one frame.
+    final effectiveGroup = showAdjustGroup ? group : AnnotatorToolGroup.draw;
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            D3ToolBar(children: _tools()),
-            D3ToolGroupBar<AnnotatorToolGroup>(
-              groups: const {
-                AnnotatorToolGroup.draw: 'Draw',
-                AnnotatorToolGroup.adjust: 'Adjust',
-              },
-              selected: group,
-              onSelected: onGroupChanged,
-            ),
+            D3ToolBar(children: _tools(effectiveGroup)),
+            if (showAdjustGroup)
+              D3ToolGroupBar<AnnotatorToolGroup>(
+                groups: const {
+                  AnnotatorToolGroup.draw: 'Draw',
+                  AnnotatorToolGroup.adjust: 'Adjust',
+                },
+                selected: effectiveGroup,
+                onSelected: onGroupChanged,
+              ),
           ],
         );
       },
     );
   }
 
-  List<Widget> _tools() => switch (group) {
+  List<Widget> _tools(AnnotatorToolGroup group) => switch (group) {
     AnnotatorToolGroup.draw => [
       for (final t in AnnotationTool.values)
         D3ToolButton(

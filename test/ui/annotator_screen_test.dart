@@ -18,27 +18,34 @@ void main() {
     WidgetTester tester, {
     VoidCallback? onClose,
     VoidCallback? onDone,
+    AnnotationBackground? background,
+    AnnotationController? controller,
   }) async {
     tester.view.physicalSize = const Size(1000, 1600);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final controller = AnnotationController();
-    addTearDown(controller.dispose);
+    final AnnotationController c;
+    if (controller != null) {
+      c = controller;
+    } else {
+      c = AnnotationController();
+      addTearDown(c.dispose);
+    }
 
     await tester.pumpWidget(
       MaterialApp(
         home: D3AnnotatorScreen(
-          image: MemoryImage(_png),
-          imageSize: const Size(600, 800),
-          controller: controller,
+          background: background ?? AnnotationBackground.image(MemoryImage(_png)),
+          canvasSize: const Size(600, 800),
+          controller: c,
           onClose: onClose,
           onDone: onDone,
         ),
       ),
     );
     await tester.pump();
-    return controller;
+    return c;
   }
 
   group('the screen owns its chrome', () {
@@ -70,8 +77,8 @@ void main() {
         MaterialApp(
           home: Builder(
             builder: (context) => D3AnnotatorScreen(
-              image: MemoryImage(_png),
-              imageSize: const Size(600, 800),
+              background: AnnotationBackground.image(MemoryImage(_png)),
+              canvasSize: const Size(600, 800),
               controller: AnnotationController(),
             ),
           ),
@@ -243,5 +250,69 @@ void main() {
 
       expect(surfaces.any((box) => box.color.a > 0.8), isTrue);
     });
+  });
+
+  group('blank-canvas mode (WORK-0036)', () {
+    testWidgets('the Adjust group is not offered for a colour background', (
+      tester,
+    ) async {
+      await pumpScreen(
+        tester,
+        background: const AnnotationBackground.color(Colors.blue),
+      );
+
+      expect(find.text('Adjust'), findsNothing,
+          reason: 'there is no image to crop, rotate, or mirror');
+      expect(find.text('Draw'), findsWidgets,
+          reason: 'the draw tools stay available');
+      expect(find.text('Circle'), findsOneWidget,
+          reason: 'drawing tools should show directly, not behind a '
+              'group switcher with only one remaining option');
+    });
+
+    testWidgets('the Adjust group returns for an image background', (
+      tester,
+    ) async {
+      await pumpScreen(
+        tester,
+        background: AnnotationBackground.image(MemoryImage(_png)),
+      );
+
+      expect(find.text('Adjust'), findsOneWidget);
+    });
+
+    testWidgets(
+      'switching live from an image to a colour background falls back '
+      'out of the Adjust group and cancels any in-progress crop',
+      (tester) async {
+        final controller = AnnotationController();
+        addTearDown(controller.dispose);
+
+        await pumpScreen(
+          tester,
+          background: AnnotationBackground.image(MemoryImage(_png)),
+          controller: controller,
+        );
+        await tester.tap(find.text('Adjust'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Crop'));
+        await tester.pumpAndSettle();
+        expect(find.text('Apply crop'), findsOneWidget);
+
+        await pumpScreen(
+          tester,
+          background: const AnnotationBackground.color(Colors.green),
+          controller: controller,
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Apply crop'), findsNothing,
+            reason: 'a crop frame floating over a plain fill would be '
+                'stranded UI with nothing left to act on');
+        expect(find.text('Adjust'), findsNothing);
+        expect(controller.transform.cropRect, isNull,
+            reason: 'the in-progress crop was cancelled, not applied');
+      },
+    );
   });
 }
