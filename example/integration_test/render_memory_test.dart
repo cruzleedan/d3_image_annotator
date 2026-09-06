@@ -194,17 +194,29 @@ void main() {
     final baseline = List<int>.from(gaps);
     gaps.clear();
 
+    // Pump *while* the render is in flight, not after it has already
+    // finished. Awaiting the render first and only then pumping records
+    // nothing about the render itself -- it measures whatever the first
+    // catch-up pump after a long await looks like, which is a property
+    // of `tester.pump`, not of this function. (An earlier version of
+    // this test made exactly that mistake, and it produced a "regression"
+    // that was actually a measurement artifact -- see WORK-0030's log.)
     final watch = Stopwatch()..start();
-    await renderAnnotatedImage(
+    var done = false;
+    final renderFuture = renderAnnotatedImage(
       imageBytes: source,
       annotations: markup(),
       options: const RenderOptions(maxDimension: null),
     );
-    watch.stop();
-
-    for (var i = 0; i < 20; i++) {
+    // ignore: unawaited_futures
+    renderFuture.whenComplete(() => done = true);
+    var pumped = 0;
+    while (!done && pumped < 200) {
       await tester.pump(const Duration(milliseconds: 16));
+      pumped++;
     }
+    await renderFuture;
+    watch.stop();
 
     int worst(List<int> xs) => xs.isEmpty ? 0 : xs.reduce((a, b) => a > b ? a : b);
 

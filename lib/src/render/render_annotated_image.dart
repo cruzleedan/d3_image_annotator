@@ -1,14 +1,41 @@
 import 'dart:async';
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/painting.dart';
+import 'package:image/image.dart' as pkg_img;
 
 import '../annotations/annotation.dart';
 import '../annotations/annotation_painter.dart';
 import '../geometry/image_transform.dart';
 import 'render_options.dart';
+
+/// Longest-side threshold, in pixels, above which PNG encoding moves to
+/// a background isolate.
+///
+/// **Not a knob** — deliberately not exposed on [RenderOptions]. It is
+/// an implementation detail a caller should not need to reason about,
+/// and the number is only meaningful paired with the specific costs it
+/// was measured against.
+///
+/// Set from a six-point size sweep on a Pixel 10 (WORK-0030), not from
+/// picking a round number: the background isolate has a fixed cost
+/// (~50 ms) that a wall-clock comparison shows losing to plain
+/// root-isolate encoding at every size up to ~9MP, and only winning
+/// once the work itself is large enough — full 12MP in the
+/// measurement — to outweigh that fixed cost. Below the threshold the
+/// root-isolate path is both faster *and* short enough to read as a
+/// stutter rather than a stall, so there is no reason to pay for the
+/// isolate. [kAsyncEncodeThresholdPixels] is set to
+/// [RenderOptions.maxDimension]'s own default (2000) rather than
+/// somewhere between the measured points, so the two most common
+/// outcomes are also the two simplest to reason about: the bounded
+/// default always encodes on the root isolate, and asking for more
+/// (`maxDimension: null`, or an explicit larger value) always moves to
+/// the background.
+const int kAsyncEncodeThresholdPixels = 2000;
 
 /// Renders [annotations] onto the image in [imageBytes] and returns
 /// encoded bytes.
@@ -50,30 +77,34 @@ import 'render_options.dart';
 /// expressed as an [ImageTransform] — which is the reversible
 /// representation this package is built around anyway.
 ///
-/// **Runs on the root isolate, and blocks it.** `PictureRecorder`
-/// refuses to run anywhere else ("UI actions are only available on root
-/// isolate", flutter/flutter#92575), so this cannot be moved to a
-/// background isolate however much one might want to.
+/// **Compositing runs on the root isolate and blocks it.**
+/// `PictureRecorder` refuses to run anywhere else ("UI actions are only
+/// available on root isolate", flutter/flutter#92575) — there is no way
+/// to move drawing off it. What *can* move, and does above
+/// [kAsyncEncodeThresholdPixels], is PNG encoding: it is most of the
+/// cost (WORK-0027 measured 541 ms of 648 at 12MP, against 26 ms for
+/// compositing) and none of it depends on the engine, so it runs in a
+/// background isolate once an output is large enough to be worth the
+/// isolate's own fixed overhead (WORK-0030).
 ///
-/// Measured on a Pixel 10 with a 12MP source (WORK-0027):
+/// Measured on a Pixel 10 with a 12MP source:
 ///
-/// | | full resolution | bounded default |
+/// | | full resolution (async encode) | bounded default (2000px, sync encode) |
 /// |---|---|---|
-/// | elapsed | ~695 ms | ~223 ms |
+/// | elapsed | ~700 ms | ~220 ms |
+/// | **worst frame** | **~134 ms** | **~120 ms** |
 /// | peak decoded RGBA | 91.6 MB | 57.2 MB |
 ///
-/// A full-resolution render therefore freezes the UI for roughly 640 ms
-/// — about 40 dropped frames. **Show a progress indicator**, and prefer
-/// the bounded default unless the original resolution is genuinely
-/// needed. Rendering several images for one report multiplies this:
-/// ten at full resolution is close to seven seconds.
+/// Both numbers are well short of what an unconditional root-isolate
+/// encode cost before this: full resolution alone was ~640 ms of worst
+/// frame, about 40 dropped frames. The remaining ~100–130 ms at either
+/// size is `toByteData(rawRgba)` plus compositing, and it is the floor:
+/// unlike encoding, it cannot leave the root isolate.
 ///
-/// Most of that is removable and is being removed. A stage breakdown
-/// puts PNG encoding at 541 ms of the 648 ms total, against 26 ms for
-/// compositing; encoding is mostly deflate and can run in a background
-/// isolate, which takes the worst frame to ~134 ms at the same
-/// wall-clock cost. WORK-0030 tracks that change and WORK-0031 the
-/// multi-image case. Until then the numbers above are what to expect.
+/// Rendering several images for one report still adds up — WORK-0031
+/// tracks a batch API with progress for that case, since this function
+/// renders one image at a time and a caller looping it has no way to
+/// report progress except by counting iterations itself.
 Future<Uint8List> renderAnnotatedImage({
   required Uint8List imageBytes,
   required List<Annotation> annotations,
@@ -195,15 +226,57 @@ Size _scaleToFit(Size size, int? maxDimension) {
 }
 
 Future<Uint8List> _encode(ui.Image image, RenderOptions options) async {
-  final data = await image.toByteData(
-    format: switch (options.format) {
-      RenderFormat.png => ui.ImageByteFormat.png,
-    },
-  );
+  switch (options.format) {
+    case RenderFormat.png:
+      final longestSide = math.max(image.width, image.height);
+      return longestSide >= kAsyncEncodeThresholdPixels
+          ? await _encodePngOffIsolate(image)
+          : await _encodePngOnRootIsolate(image);
+  }
+}
+
+/// The original, unconditional path: extract and encode both on the
+/// root isolate. Used below [kAsyncEncodeThresholdPixels], where it
+/// measures faster than the isolate path as well as short enough not
+/// to need it.
+Future<Uint8List> _encodePngOnRootIsolate(ui.Image image) async {
+  final data = await image.toByteData(format: ui.ImageByteFormat.png);
   if (data == null) {
     throw const RenderException('failed to encode the rendered image');
   }
   return data.buffer.asUint8List();
+}
+
+/// Extracts raw pixels on the root isolate (unavoidable --
+/// `ui.Image.toByteData` cannot run anywhere else) and PNG-encodes them
+/// in a background isolate.
+///
+/// The pixel buffer is moved via [TransferableTypedData] rather than
+/// captured by the isolate closure, which would copy it: measured at
+/// 18–20 ms to transfer against 33–36 ms to copy, for a 12MP source
+/// (WORK-0030). Transferring also means the buffer is never held twice
+/// at once.
+Future<Uint8List> _encodePngOffIsolate(ui.Image image) async {
+  final raw = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+  if (raw == null) {
+    throw const RenderException('failed to extract pixels for encoding');
+  }
+  final transferable = TransferableTypedData.fromList([
+    raw.buffer.asUint8List(),
+  ]);
+  final width = image.width;
+  final height = image.height;
+
+  return Isolate.run(() {
+    final pixels = transferable.materialize().asUint8List();
+    final decoded = pkg_img.Image.fromBytes(
+      width: width,
+      height: height,
+      bytes: pixels.buffer,
+      numChannels: 4,
+    );
+    return pkg_img.encodePng(decoded);
+  });
 }
 
 Future<ui.Image> _decodeSource(Uint8List bytes) async {

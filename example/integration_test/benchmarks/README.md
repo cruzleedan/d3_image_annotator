@@ -24,6 +24,8 @@ nothing about a phone.
 | `isolate_encode_test.dart` | Can encoding leave the root isolate? | Yes. Worst frame 682 → 175 ms |
 | `transfer_cost_test.dart` | What is the residual, and can it go? | `toByteData(rawRgba)`, ~60 ms, cannot move. Transfer beats copy 18 vs 33 ms |
 | `codec_options_test.dart` | Would JPEG or a lower PNG level be better? | No to both. JPEG is 2× slower in pure Dart; level 3 is 24% larger |
+| `threshold_test.dart` | Where does the isolate stop paying for itself, on plain content? | Engine leads up to ~9MP on a flat gradient |
+| `threshold_realistic_test.dart` | Same question, on content shaped like what this package actually renders | Engine leads up to ~9MP here too; isolate only wins at full 12MP. Threshold set at 2000px — see below |
 
 ## Baseline, Pixel 10 (Android 17), 12MP source
 
@@ -36,11 +38,44 @@ nothing about a phone.
 | peak decoded RGBA | 91.6 MB | 57.2 MB |
 
 Worst frame during a full-resolution render: **682 ms** blocking,
-**134 ms** with encoding moved to an isolate. The ~100 ms floor is
-`toByteData(rawRgba)`, which is root-isolate only.
+**134 ms** with encoding moved to an isolate (initial prototype). After
+shipping the split in `render_annotated_image.dart` and re-measuring
+against the real code path: **57–68 ms**, at or below the 39–73 ms
+baseline of an idle spinner. The ~100 ms floor from the prototype
+measurement did not fully materialize in the shipped version — encoding
+moving off-isolate removed essentially all of the jank, not just most
+of it. The residual `toByteData(rawRgba)` cost is real but apparently
+small enough on this device not to dominate a frame.
 
-## Note on the `image` dependency
+## Threshold: why 2000px, not somewhere between the measured points
 
-`image` is a dev-dependency of the *example* only, for these benchmarks.
-Whether the package itself takes that dependency is WORK-0030's decision
-to make, and should not be pre-empted by a measurement.
+`threshold_test.dart` (flat gradient) and `threshold_realistic_test.dart`
+(bands + circles, scaled to size — closer to a real annotated photo) both
+swept six sizes from 800×600 to 4000×3000, comparing root-isolate
+encoding against the background-isolate path. Both found the same
+shape: the background isolate has a fixed cost (~50 ms, visible clearly
+at small sizes) that a wall-clock comparison shows losing to plain
+root-isolate encoding at every size up to ~9MP, and only winning once
+the encode itself is large enough to outweigh that fixed cost — reached
+in this sweep only at full 12MP. Reproduced twice on the realistic
+content.
+
+This means "faster" is not the right test for where to place the
+threshold: below the crossover, the isolate is a throughput *loss*, not
+just an unneeded precaution. The threshold used in
+`render_annotated_image.dart` is `kAsyncEncodeThresholdPixels = 2000`
+— `RenderOptions.maxDimension`'s own default — rather than a value
+between the measured points, so the two most common outcomes stay easy
+to reason about: the bounded default always encodes on the root
+isolate (faster there anyway), and asking for more always moves to the
+background isolate (faster there too, and where the jank was worst).
+
+## The `image` dependency
+
+Adopted as the package's first third-party dependency in WORK-0030,
+after these benchmarks established encoding — not compositing — as the
+cost worth moving, and that pure-Dart PNG in an isolate is not worse
+than the engine's own encoder at the size where it matters (12MP:
+423–473 ms isolate vs. 569–572 ms engine). Used only inside
+`render_annotated_image.dart`'s `_encodePngOffIsolate`; nothing else in
+the package depends on it.

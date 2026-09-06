@@ -302,6 +302,97 @@ void main() {
     });
   });
 
+  group('encode path split (WORK-0030)', () {
+    // These run on the host VM, so they cannot measure jank -- that is
+    // what example/integration_test/ is for. What belongs here is
+    // correctness: whichever path ran, the output must decode and the
+    // marks must still land where they were drawn. A host test can
+    // exercise both sides of the threshold cheaply; it just cannot
+    // watch a frame budget while doing so.
+    test('below the threshold: still correct, still clipped', () async {
+      const size = kAsyncEncodeThresholdPixels - 200;
+      final source = await _whiteImage(size, size);
+
+      final bytes = await renderAnnotatedImage(
+        imageBytes: source,
+        annotations: [filledRect(left: 0, top: 0, right: 0.5, bottom: 0.5)],
+      );
+
+      final rendered = await _decode(bytes);
+      addTearDown(rendered.dispose);
+      expect(rendered.width, size);
+      expect(await _pixelAt(rendered, 0.25, 0.25), red);
+      expect(await _pixelAt(rendered, 0.75, 0.75), const Color(0xFFFFFFFF));
+    });
+
+    test('at and above the threshold: still correct, still clipped', () async {
+      // Large enough to route through the background-isolate encoder.
+      // Kept as small as the threshold allows so the host-VM test suite
+      // stays fast -- the actual jank claim is verified on-device.
+      const size = kAsyncEncodeThresholdPixels;
+      final source = await _whiteImage(size, size);
+
+      final bytes = await renderAnnotatedImage(
+        imageBytes: source,
+        annotations: [filledRect(left: 0, top: 0, right: 0.5, bottom: 0.5)],
+      );
+
+      final rendered = await _decode(bytes);
+      addTearDown(rendered.dispose);
+      expect(rendered.width, size);
+      expect(await _pixelAt(rendered, 0.25, 0.25), red);
+      expect(await _pixelAt(rendered, 0.75, 0.75), const Color(0xFFFFFFFF));
+    });
+
+    test('the threshold is measured against the output, not the source',
+        () async {
+      // A large source cropped down to a small output should take the
+      // cheap path -- the cost this threshold manages is encoding the
+      // *output*, and a caller cropping a 12MP photo to a small detail
+      // should not pay the isolate's fixed overhead for a small result.
+      const size = kAsyncEncodeThresholdPixels * 2;
+      final source = await _whiteImage(size, size);
+
+      final bytes = await renderAnnotatedImage(
+        imageBytes: source,
+        annotations: const [],
+        transform: ImageTransform(
+          cropRect: NormalizedRect(left: 0, top: 0, right: 0.1, bottom: 0.1),
+        ),
+      );
+
+      final rendered = await _decode(bytes);
+      addTearDown(rendered.dispose);
+      expect(rendered.width, lessThan(kAsyncEncodeThresholdPixels),
+          reason: 'cropped output is small, regardless of source size');
+    });
+
+    test('output is deterministic on both sides of the threshold', () async {
+      // WORK-0027's guarantee (rendering twice from the same data is
+      // identical) must keep holding regardless of which encoder ran.
+      for (final size in [
+        kAsyncEncodeThresholdPixels - 100,
+        kAsyncEncodeThresholdPixels + 100,
+      ]) {
+        final source = await _whiteImage(size, size);
+        final annotations = [
+          filledRect(left: 0.2, top: 0.2, right: 0.6, bottom: 0.6),
+        ];
+
+        final first = await renderAnnotatedImage(
+          imageBytes: source,
+          annotations: annotations,
+        );
+        final second = await renderAnnotatedImage(
+          imageBytes: source,
+          annotations: annotations,
+        );
+
+        expect(first, second, reason: 'size $size');
+      }
+    });
+  });
+
   group('failure', () {
     test('a source that cannot be loaded raises a typed error', () async {
       // Rather than a bare exception from deep inside the image stack.
