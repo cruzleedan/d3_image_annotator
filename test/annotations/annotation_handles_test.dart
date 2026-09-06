@@ -164,7 +164,10 @@ void main() {
       },
     );
 
-    test('an unrotated shape offers a rotation handle beyond its top-right corner', () {
+    test('an unrotated shape offers a rotation handle beyond its '
+        'bottom-right corner', () {
+      // Bottom-right specifically so it stays clear of the floating
+      // delete/duplicate controls, which anchor to the left side.
       final positions = gripPositionsInPixels(
         rectangle(),
         contentRect,
@@ -172,13 +175,14 @@ void main() {
       );
 
       expect(positions, contains(AnnotationGrip.rotate));
-      final topRight = positions[AnnotationGrip.topRight]!;
+      final bottomRight = positions[AnnotationGrip.bottomRight]!;
       final rotateHandle = positions[AnnotationGrip.rotate]!;
       // Beyond the corner, continuing outward from the centre, not
       // sitting on top of it or inside the shape.
-      expect((rotateHandle - topRight).distance, closeTo(kRotationHandleOffset, 1e-9));
-      expect(rotateHandle.dx, greaterThan(topRight.dx));
-      expect(rotateHandle.dy, lessThan(topRight.dy));
+      expect((rotateHandle - bottomRight).distance,
+          closeTo(kRotationHandleOffset, 1e-9));
+      expect(rotateHandle.dx, greaterThan(bottomRight.dx));
+      expect(rotateHandle.dy, greaterThan(bottomRight.dy));
     });
   });
 
@@ -280,45 +284,120 @@ void main() {
           rotation: math.pi / 2,
         );
 
-        // Drag the shape's on-screen bottom-right corner further along
-        // the axis that, before rotation, was the rect's *bottom* edge
-        // (i.e. increasing `bottom` in the unrotated frame) -- reached
-        // by inverse-rotating the intended local-frame point back into
-        // pixel space, exactly what `unrotatedEquivalentPoint` undoes.
-        final mappedRect = mapRectToPixels(
+        // Drag the shape's on-screen bottomRight handle straight outward
+        // along its own diagonal from centre -- a generic "make it
+        // bigger from this corner" drag, in world/screen pixel space
+        // (exactly what a real gesture supplies), not a hand-derived
+        // local-frame target coupled to any particular implementation.
+        final positions = gripPositionsInPixels(
+          tall,
+          contentRect,
+          ImageTransform.identity,
+        );
+        final center = mapRectToPixels(
           tall.bounds,
           contentRect,
           ImageTransform.identity,
-        );
-        final center = mappedRect.center;
-        // Local-frame target: push bottom-right's `bottom` outward.
-        final localTarget = Offset(mappedRect.right, mappedRect.bottom + 40);
-        final dx = localTarget.dx - center.dx;
-        final dy = localTarget.dy - center.dy;
-        final cosA = math.cos(tall.rotation);
-        final sinA = math.sin(tall.rotation);
-        final pixelPosition = Offset(
-          center.dx + dx * cosA - dy * sinA,
-          center.dy + dx * sinA + dy * cosA,
-        );
+        ).center;
+        final bottomRight = positions[AnnotationGrip.bottomRight]!;
+        final pixelPosition = bottomRight + (bottomRight - center) * 0.5;
 
-        final unrotatedPoint = unrotatedEquivalentPoint(
+        final resized = resizeRotatedAnnotation(
           tall,
+          AnnotationGrip.bottomRight,
           pixelPosition,
           contentRect,
           ImageTransform.identity,
-        );
-        final resized =
-            resizeAnnotation(tall, AnnotationGrip.bottomRight, unrotatedPoint)!
-                as RectangleAnnotation;
+        )! as RectangleAnnotation;
 
-        expect(resized.rect.right, closeTo(tall.rect.right, 1e-6),
-            reason: 'the drag only pushed the local bottom edge, not the '
-                'local right edge');
-        expect(resized.rect.bottom, greaterThan(tall.rect.bottom),
-            reason: 'what was originally the rect\'s height must grow');
+        // The rect was 0.2 wide x 0.4 tall before rotation. A 90° turn
+        // means the on-screen "outward along the diagonal" drag grows
+        // both the local width and height somewhat, but the *original*
+        // long axis (what was `bottom - top`, i.e. height) must still
+        // end up growing by more than the original short axis (what was
+        // `right - left`, i.e. width) did not shrink -- concretely: the
+        // resize must actually change the rect (not be a no-op) and
+        // must not touch rotation.
+        expect(resized.rect, isNot(tall.rect),
+            reason: 'the drag must actually resize the rect');
         expect(resized.rotation, tall.rotation,
             reason: 'resizing must not change rotation');
+
+        // The real invariant this test exists for: the corner opposite
+        // the one dragged (topLeft) must stay fixed on screen -- see
+        // the dedicated anchor-corner test below for the direct check;
+        // this confirms it holds for a full quarter turn specifically,
+        // the case that originally motivated tilted-axis resize.
+        final anchorBefore = positions[AnnotationGrip.topLeft]!;
+        final anchorAfter = gripPositionsInPixels(
+          resized,
+          contentRect,
+          ImageTransform.identity,
+        )[AnnotationGrip.topLeft]!;
+        expect((anchorAfter - anchorBefore).distance, lessThan(1e-6));
+      },
+    );
+
+    test(
+      'corner-drag on a rotated shape keeps the opposite corner fixed '
+      'on screen, not drifting every corner outward together',
+      () {
+        // Regression test for a real bug found on-device: dragging one
+        // corner of a rotated shape visibly moved every corner, because
+        // the drag point was being inverse-rotated around the shape's
+        // *current* centre -- correct for a hit test, wrong for a
+        // resize, since a resize is about to move the centre. The fix
+        // keeps the diagonally opposite corner's on-screen position
+        // fixed instead.
+        final square = RectangleAnnotation(
+          id: 'r',
+          style: const AnnotationStyle(),
+          rect: NormalizedRect(left: 0.25, top: 0.25, right: 0.75, bottom: 0.75),
+          rotation: math.pi / 6, // 30 degrees
+        );
+
+        // The opposite corner of bottomRight is topLeft -- record its
+        // on-screen (rotated) position before the drag.
+        final before = gripPositionsInPixels(
+          square,
+          contentRect,
+          ImageTransform.identity,
+        );
+        final anchorBefore = before[AnnotationGrip.topLeft]!;
+
+        // Drag the on-screen bottomRight handle further outward along
+        // its own diagonal.
+        final bottomRightBefore = before[AnnotationGrip.bottomRight]!;
+        final center = mapRectToPixels(
+          square.bounds,
+          contentRect,
+          ImageTransform.identity,
+        ).center;
+        final outward = bottomRightBefore - center;
+        final dragTarget = bottomRightBefore + outward * 0.5;
+
+        final resized = resizeRotatedAnnotation(
+          square,
+          AnnotationGrip.bottomRight,
+          dragTarget,
+          contentRect,
+          ImageTransform.identity,
+        )! as RectangleAnnotation;
+
+        final after = gripPositionsInPixels(
+          resized,
+          contentRect,
+          ImageTransform.identity,
+        );
+        final anchorAfter = after[AnnotationGrip.topLeft]!;
+
+        expect((anchorAfter - anchorBefore).distance, lessThan(1e-6),
+            reason: 'the opposite (topLeft) corner must not move on '
+                'screen when bottomRight is dragged');
+        expect((after[AnnotationGrip.bottomRight]! - dragTarget).distance,
+            lessThan(1e-6),
+            reason: 'the dragged corner must land exactly under the '
+                'finger');
       },
     );
 

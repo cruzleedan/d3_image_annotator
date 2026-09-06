@@ -331,18 +331,19 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
         return;
       }
 
-      // Corner-drag resizes along the shape's own tilted axes (WORK
-      // -0035): the drag point is converted to where it would land on
-      // the shape's *unrotated* equivalent before `_resizeRect`'s
-      // rotation-oblivious math runs, the mirror image of how
-      // hit-testing already treats a rotated shape.
-      final unrotatedPoint = unrotatedEquivalentPoint(
+      // Corner-drag resizes along the shape's own tilted axes, keeping
+      // the *opposite* corner anchored on screen (WORK-0035, fixed for
+      // rotated shapes as a follow-up) -- see
+      // resizeRotatedAnnotation's own doc comment for why this needs a
+      // dedicated rotation-aware function rather than routing a
+      // computed point through the plain resizeAnnotation.
+      final resized = resizeRotatedAnnotation(
         current,
+        grip,
         pixelPosition,
         contentRect,
         widget.imageTransform,
       );
-      final resized = resizeAnnotation(current, grip, unrotatedPoint);
       if (resized != null) widget.controller.update(id, resized);
       return;
     }
