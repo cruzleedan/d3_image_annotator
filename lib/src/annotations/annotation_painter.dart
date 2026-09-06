@@ -5,8 +5,10 @@ import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
 import '../geometry/image_transform.dart';
+import '../geometry/transformed_image_paint.dart';
 import 'annotation.dart';
 import 'annotation_handles.dart';
+import 'image_annotation_cache.dart';
 
 /// Renders annotations onto a canvas.
 ///
@@ -26,6 +28,7 @@ void paintAnnotations(
   List<Annotation> annotations, {
   String? selectedId,
   ImageTransform transform = ImageTransform.identity,
+  ImageAnnotationCache? imageCache,
 }) {
   // Clip to the visible region so a mark straddling the crop boundary
   // keeps its visible half and loses the rest. Not hidden, not deleted:
@@ -95,6 +98,13 @@ void paintAnnotations(
           textBoundsInPixels(annotation, contentRect, transform),
           rotation,
           (r) => _paintText(canvas, annotation, r, shorterSide),
+        );
+      case ImageAnnotation(:final rect, :final rotation):
+        _drawRotated(
+          canvas,
+          mapRectToPixels(rect, contentRect, transform),
+          rotation,
+          (r) => _paintImage(canvas, annotation, r, imageCache),
         );
     }
 
@@ -265,6 +275,59 @@ void _paintText(
   painter.paint(canvas, bounds.topLeft);
 }
 
+/// Draws [annotation]'s decoded image into [bounds] via its own
+/// [ImageAnnotation.imageTransform], or a neutral placeholder while
+/// undecoded/failed (WORK-0037).
+///
+/// `paintAnnotations` only ever *reads* from [cache] -- it never calls
+/// `request` itself, since paint cannot await a decode. Placing or
+/// loading an `ImageAnnotation` is what triggers that (see
+/// `AnnotationController.add`/the constructor's initial-list loop);
+/// this function paints whatever the cache currently holds, which may
+/// be nothing at all if [cache] itself is null (a document with no
+/// image annotations never needs one).
+void _paintImage(
+  Canvas canvas,
+  ImageAnnotation annotation,
+  Rect bounds,
+  ImageAnnotationCache? cache,
+) {
+  final entry = cache?.entryFor(annotation.reference);
+  final image = entry?.image;
+  if (entry != null && entry.state == ImageAnnotationLoadState.ready && image != null) {
+    drawTransformedImage(canvas, image, annotation.imageTransform, bounds);
+    return;
+  }
+
+  // Undecoded or failed: a neutral filled placeholder with a loading
+  // (or error) affordance -- never skipped entirely, so the annotation
+  // stays visible (and, since hit-testing works from the placement rect
+  // regardless of decode state, selectable) throughout.
+  final failed = entry?.state == ImageAnnotationLoadState.failed;
+  canvas.drawRect(
+    bounds,
+    Paint()..color = const Color(0xFF3A3A3C),
+  );
+  final icon = failed ? Icons.broken_image : Icons.image;
+  final iconSize = math.min(bounds.width, bounds.height) * 0.4;
+  final painter = TextPainter(
+    text: TextSpan(
+      text: String.fromCharCode(icon.codePoint),
+      style: TextStyle(
+        color: const Color(0xB3FFFFFF),
+        fontSize: iconSize,
+        fontFamily: icon.fontFamily,
+        package: icon.fontPackage,
+      ),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+  painter.paint(
+    canvas,
+    bounds.center - Offset(painter.width / 2, painter.height / 2),
+  );
+}
+
 /// Draws a grab handle at each of the annotation's grips.
 ///
 /// Handles are a constant *screen* size, unlike stroke width which
@@ -341,17 +404,25 @@ void _paintDashedPolygon(Canvas canvas, List<Offset> corners, Paint paint) {
 /// [paintAnnotations] -- it holds no drawing logic of its own, so the
 /// export path can call the same function without a widget in sight.
 class AnnotationPainter extends CustomPainter {
-  const AnnotationPainter({
+  AnnotationPainter({
     required this.annotations,
     required this.contentRect,
     this.selectedId,
     this.transform = ImageTransform.identity,
-  });
+    this.imageCache,
+  }) : super(repaint: imageCache);
 
   final List<Annotation> annotations;
   final Rect contentRect;
   final String? selectedId;
   final ImageTransform transform;
+
+  /// Decoded images for any `ImageAnnotation`s in [annotations]
+  /// (WORK-0037). Passed as `CustomPainter`'s own `repaint` listenable,
+  /// so a decode finishing (or failing) after this painter is built
+  /// repaints automatically -- the painter itself never triggers a
+  /// decode, only reads whatever the cache currently holds.
+  final ImageAnnotationCache? imageCache;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -361,6 +432,7 @@ class AnnotationPainter extends CustomPainter {
       annotations,
       selectedId: selectedId,
       transform: transform,
+      imageCache: imageCache,
     );
   }
 
@@ -369,6 +441,7 @@ class AnnotationPainter extends CustomPainter {
     return oldDelegate.contentRect != contentRect ||
         oldDelegate.selectedId != selectedId ||
         oldDelegate.transform != transform ||
+        oldDelegate.imageCache != imageCache ||
         !listEquals(oldDelegate.annotations, annotations);
   }
 }

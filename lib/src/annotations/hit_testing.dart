@@ -147,6 +147,14 @@ bool hitTest(
         toleranceX,
         toleranceY,
       );
+
+    case ImageAnnotation(:final rect):
+      // Always hit anywhere inside, unlike an unfilled rectangle --
+      // an image annotation has no "outline only" mode, and hit-testing
+      // must work regardless of decode state (WORK-0037's decision),
+      // so this never depends on whether the image has finished
+      // decoding.
+      return rect.containsWithTolerance(point, toleranceX, toleranceY);
   }
 }
 

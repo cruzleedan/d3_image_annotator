@@ -331,6 +331,7 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
                               annotations: widget.controller.annotations,
                               contentRect: contentRect,
                               transform: widget.controller.transform,
+                              imageCache: widget.controller.imageCache,
                             ),
                           ),
                         ),

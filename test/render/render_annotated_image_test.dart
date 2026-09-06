@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -9,10 +10,15 @@ import 'package:flutter_test/flutter_test.dart';
 /// Builds a solid-white source image, so a coloured annotation
 /// is unambiguous against it.
 Future<Uint8List> _whiteImage(int width, int height) async {
+  return _solidImage(width, height, const Color(0xFFFFFFFF));
+}
+
+/// Builds a solid-[color] source image.
+Future<Uint8List> _solidImage(int width, int height, Color color) async {
   final recorder = ui.PictureRecorder();
   ui.Canvas(recorder).drawRect(
     Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
-    Paint()..color = const Color(0xFFFFFFFF),
+    Paint()..color = color,
   );
   final image = await recorder.endRecording().toImage(width, height);
   final data = await image.toByteData(format: ui.ImageByteFormat.png);
@@ -752,5 +758,191 @@ void main() {
         },
       );
     }
+  });
+
+  group('image annotations (WORK-0037)', () {
+    const blue = Color(0xFF0000FF);
+
+    test(
+      'a decoded ImageAnnotation composites its own image into its '
+      'placement rect',
+      () async {
+        final backgroundBytes = await _whiteImage(400, 400);
+        final overlayBytes = await _solidImage(20, 20, const Color(0xFF00FF00));
+        final cache = ImageAnnotationCache(
+          resolver: (ref) async => overlayBytes,
+        );
+        addTearDown(cache.dispose);
+        cache.request('ref');
+        await pumpEventQueue();
+
+        final bytes = await renderAnnotatedImage(
+          imageBytes: backgroundBytes,
+          annotations: [
+            ImageAnnotation(
+              id: 'i',
+              style: const AnnotationStyle(),
+              reference: 'ref',
+              rect: NormalizedRect(
+                left: 0,
+                top: 0,
+                right: 0.5,
+                bottom: 0.5,
+              ),
+            ),
+          ],
+          imageCache: cache,
+        );
+
+        final rendered = await _decode(bytes);
+        addTearDown(rendered.dispose);
+        expect(rendered.width, 400);
+        expect(rendered.height, 400);
+        expect(await _pixelAt(rendered, 0.25, 0.25), const Color(0xFF00FF00),
+            reason: 'inside the placement rect, the overlay image shows');
+        expect(await _pixelAt(rendered, 0.75, 0.75), const Color(0xFFFFFFFF),
+            reason: 'outside it, the background shows through');
+      },
+    );
+
+    test("an image annotation's own crop shows only that region of the "
+        'source', () async {
+      final backgroundBytes = await _whiteImage(200, 200);
+      // Left half green, right half red -- cropping to the right half
+      // and placing it must show only red.
+      final recorder = ui.PictureRecorder();
+      final canvas = ui.Canvas(recorder);
+      canvas.drawRect(
+        const Rect.fromLTWH(0, 0, 10, 20),
+        Paint()..color = const Color(0xFF00FF00),
+      );
+      canvas.drawRect(
+        const Rect.fromLTWH(10, 0, 10, 20),
+        Paint()..color = red,
+      );
+      final overlayImage = await recorder.endRecording().toImage(20, 20);
+      final overlayData = await overlayImage.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      overlayImage.dispose();
+      final overlayBytes = overlayData!.buffer.asUint8List();
+
+      final cache = ImageAnnotationCache(resolver: (ref) async => overlayBytes);
+      addTearDown(cache.dispose);
+      cache.request('ref');
+      await pumpEventQueue();
+
+      final bytes = await renderAnnotatedImage(
+        imageBytes: backgroundBytes,
+        annotations: [
+          ImageAnnotation(
+            id: 'i',
+            style: const AnnotationStyle(),
+            reference: 'ref',
+            rect: NormalizedRect(left: 0, top: 0, right: 0.5, bottom: 0.5),
+            imageTransform: ImageTransform(
+              cropRect: NormalizedRect(left: 0.5, top: 0, right: 1, bottom: 1),
+            ),
+          ),
+        ],
+        imageCache: cache,
+      );
+
+      final rendered = await _decode(bytes);
+      addTearDown(rendered.dispose);
+      expect(await _pixelAt(rendered, 0.25, 0.25), red,
+          reason: "only the cropped (right, red) half of the source "
+              'should ever be drawn');
+    });
+
+    test(
+      'an undecoded ImageAnnotation renders as a placeholder, not '
+      'skipped or a crash',
+      () async {
+        final backgroundBytes = await _whiteImage(400, 400);
+        final cache = ImageAnnotationCache(
+          resolver: (ref) => Completer<Uint8List>().future, // never resolves
+        );
+        addTearDown(cache.dispose);
+        cache.request('ref');
+        // Deliberately no pumpEventQueue: the entry stays "loading".
+
+        final bytes = await renderAnnotatedImage(
+          imageBytes: backgroundBytes,
+          annotations: [
+            ImageAnnotation(
+              id: 'i',
+              style: const AnnotationStyle(),
+              reference: 'ref',
+              rect: NormalizedRect(
+                left: 0,
+                top: 0,
+                right: 0.5,
+                bottom: 0.5,
+              ),
+            ),
+          ],
+          imageCache: cache,
+        );
+
+        final rendered = await _decode(bytes);
+        addTearDown(rendered.dispose);
+        // The placeholder is a distinct dark grey, not the plain white
+        // background -- confirms something was actually painted for
+        // the undecoded annotation rather than it being skipped.
+        final placeholderPixel = await _pixelAt(rendered, 0.1, 0.1);
+        final backgroundPixel = await _pixelAt(rendered, 0.9, 0.9);
+        expect(placeholderPixel, isNot(backgroundPixel));
+        expect(backgroundPixel, const Color(0xFFFFFFFF));
+      },
+    );
+
+    test('rendering with no imageCache at all still succeeds (placeholder '
+        'everywhere)', () async {
+      final backgroundBytes = await _whiteImage(200, 200);
+
+      final bytes = await renderAnnotatedImage(
+        imageBytes: backgroundBytes,
+        annotations: [
+          ImageAnnotation(
+            id: 'i',
+            style: const AnnotationStyle(),
+            reference: 'ref',
+            rect: NormalizedRect(left: 0, top: 0, right: 0.5, bottom: 0.5),
+          ),
+        ],
+      );
+
+      final rendered = await _decode(bytes);
+      addTearDown(rendered.dispose);
+      expect(rendered.width, 200);
+    });
+
+    test('an image annotation composites correctly on a colour background '
+        'too (renderAnnotatedCanvas)', () async {
+      final overlayBytes = await _whiteImage(20, 20);
+      final cache = ImageAnnotationCache(resolver: (ref) async => overlayBytes);
+      addTearDown(cache.dispose);
+      cache.request('ref');
+      await pumpEventQueue();
+
+      final bytes = await renderAnnotatedCanvas(
+        color: blue,
+        size: const Size(400, 400),
+        annotations: [
+          ImageAnnotation(
+            id: 'i',
+            style: const AnnotationStyle(),
+            reference: 'ref',
+            rect: NormalizedRect(left: 0, top: 0, right: 1, bottom: 1),
+          ),
+        ],
+        imageCache: cache,
+      );
+
+      final rendered = await _decode(bytes);
+      addTearDown(rendered.dispose);
+      expect(rendered.width, 400);
+    });
   });
 }

@@ -9,7 +9,9 @@ import 'package:image/image.dart' as pkg_img;
 
 import '../annotations/annotation.dart';
 import '../annotations/annotation_painter.dart';
+import '../annotations/image_annotation_cache.dart';
 import '../geometry/image_transform.dart';
+import '../geometry/transformed_image_paint.dart';
 import 'render_options.dart';
 
 /// Longest-side threshold, in pixels, above which PNG encoding moves to
@@ -110,6 +112,7 @@ Future<Uint8List> renderAnnotatedImage({
   required List<Annotation> annotations,
   ImageTransform transform = ImageTransform.identity,
   RenderOptions options = const RenderOptions(),
+  ImageAnnotationCache? imageCache,
 }) async {
   final source = await decodeSourceImage(imageBytes);
   try {
@@ -118,6 +121,7 @@ Future<Uint8List> renderAnnotatedImage({
       annotations: annotations,
       transform: transform,
       options: options,
+      imageCache: imageCache,
     );
   } finally {
     // Always dispose, including on failure: a leaked decoded image is
@@ -163,6 +167,7 @@ Future<Uint8List> renderAnnotatedCanvas({
   required List<Annotation> annotations,
   ImageTransform transform = ImageTransform.identity,
   RenderOptions options = const RenderOptions(),
+  ImageAnnotationCache? imageCache,
 }) async {
   assert(
     (imageBytes == null) != (color == null),
@@ -188,6 +193,7 @@ Future<Uint8List> renderAnnotatedCanvas({
       annotations: annotations,
       transform: transform,
       options: options,
+      imageCache: imageCache,
     );
   } finally {
     source.dispose();
@@ -250,6 +256,7 @@ Future<Uint8List> renderCompositedImage({
   required ImageTransform transform,
   required RenderOptions options,
   PixelEncoder? encoder,
+  ImageAnnotationCache? imageCache,
 }) async {
   final sourceSize = Size(source.width.toDouble(), source.height.toDouble());
 
@@ -265,11 +272,17 @@ Future<Uint8List> renderCompositedImage({
   final canvas = ui.Canvas(recorder);
   final target = Offset.zero & output;
 
-  _drawTransformedSource(canvas, source, transform, target);
+  drawTransformedImage(canvas, source, transform, target);
 
   // The same call the live overlay makes. A second rendering path is
   // what this design exists to prevent.
-  paintAnnotations(canvas, target, annotations, transform: transform);
+  paintAnnotations(
+    canvas,
+    target,
+    annotations,
+    transform: transform,
+    imageCache: imageCache,
+  );
 
   final picture = recorder.endRecording();
   try {
@@ -287,54 +300,6 @@ Future<Uint8List> renderCompositedImage({
   }
 }
 
-/// Draws the cropped, mirrored, rotated source into [target].
-///
-/// Built from canvas transforms rather than by producing intermediate
-/// images: each intermediate would be another full-size allocation, and
-/// the whole point of the bounded default is to keep peak memory down.
-void _drawTransformedSource(
-  ui.Canvas canvas,
-  ui.Image source,
-  ImageTransform transform,
-  Rect target,
-) {
-  final crop = transform.effectiveCrop;
-  // Source rect in the original image's pixels.
-  final src = Rect.fromLTRB(
-    crop.left * source.width,
-    crop.top * source.height,
-    crop.right * source.width,
-    crop.bottom * source.height,
-  );
-
-  canvas.save();
-  // Rotate and mirror about the target's centre, then draw the cropped
-  // region into the *unrotated* rect -- for an odd quarter turn that
-  // rect is the target with its axes swapped, since the rotation is
-  // what makes it fit.
-  canvas.translate(target.center.dx, target.center.dy);
-  if (transform.quarterTurns != 0) {
-    canvas.rotate(transform.quarterTurns * math.pi / 2);
-  }
-  if (transform.mirrored) canvas.scale(-1, 1);
-
-  final drawSize = transform.swapsAxes
-      ? Size(target.height, target.width)
-      : target.size;
-  final dst = Rect.fromCenter(
-    center: Offset.zero,
-    width: drawSize.width,
-    height: drawSize.height,
-  );
-
-  canvas.drawImageRect(
-    source,
-    src,
-    dst,
-    Paint()..filterQuality = FilterQuality.high,
-  );
-  canvas.restore();
-}
 
 Size _scaleToFit(Size size, int? maxDimension) {
   if (maxDimension == null) return size;

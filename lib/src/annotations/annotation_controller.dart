@@ -4,6 +4,7 @@ import '../coordinates/normalized_rect.dart';
 import '../geometry/image_transform.dart';
 import 'annotation.dart';
 import 'annotation_style.dart';
+import 'image_annotation_cache.dart';
 
 /// Owns the list of annotations on one image, with undo/redo.
 ///
@@ -22,10 +23,26 @@ class AnnotationController extends ChangeNotifier {
     this.maxUndoSteps = 50,
     AnnotationStyle initialStyle = const AnnotationStyle(),
     ImageTransform initialTransform = ImageTransform.identity,
+    this.imageCache,
   }) : assert(maxUndoSteps > 0, 'maxUndoSteps must be positive'),
        _annotations = List.of(initial ?? const []),
        _style = initialStyle,
-       _transform = initialTransform;
+       _transform = initialTransform {
+    for (final a in _annotations) {
+      if (a case ImageAnnotation(:final reference)) {
+        imageCache?.request(reference);
+      }
+    }
+  }
+
+  /// Decodes and caches the images this controller's `ImageAnnotation`s
+  /// reference (WORK-0037). Null means no image annotations are in use
+  /// -- a controller with only the original four/five geometry types
+  /// never needs one. Owned by whoever constructs this controller, not
+  /// by the controller itself: its lifecycle (in particular, the
+  /// consumer-supplied resolver it wraps) is the consumer app's
+  /// concern, the same way the resolver function itself is.
+  final ImageAnnotationCache? imageCache;
 
   /// Cap on undo depth. Bounded so a long editing session cannot grow
   /// memory without limit; the oldest step is dropped past this.
@@ -126,6 +143,9 @@ class AnnotationController extends ChangeNotifier {
   void add(Annotation annotation) {
     _pushUndo();
     _annotations.add(annotation);
+    if (annotation case ImageAnnotation(:final reference)) {
+      imageCache?.request(reference);
+    }
     notifyListeners();
   }
 
@@ -136,6 +156,13 @@ class AnnotationController extends ChangeNotifier {
     if (index < 0) return;
     _pushUndo();
     _annotations[index] = replacement;
+    if (replacement case ImageAnnotation(:final reference)) {
+      // Covers a restyle/reference change on an existing image
+      // annotation -- request() is itself a no-op if this reference is
+      // already cached, so this is safe to call unconditionally rather
+      // than diffing the old and new reference first.
+      imageCache?.request(reference);
+    }
     notifyListeners();
   }
 
@@ -143,9 +170,23 @@ class AnnotationController extends ChangeNotifier {
     final index = _annotations.indexWhere((a) => a.id == id);
     if (index < 0) return;
     _pushUndo();
-    _annotations.removeAt(index);
+    final removed = _annotations.removeAt(index);
+    if (removed case ImageAnnotation(:final reference)) {
+      _releaseIfUnused(reference);
+    }
     if (_selectedId == id) _selectedId = null;
     notifyListeners();
+  }
+
+  /// Releases [reference] from [imageCache] unless another surviving
+  /// `ImageAnnotation` still uses it -- two placements of the same
+  /// image share one decoded copy, so removing one must not evict the
+  /// other's still-in-use entry.
+  void _releaseIfUnused(String reference) {
+    final stillUsed = _annotations.any(
+      (a) => a is ImageAnnotation && a.reference == reference,
+    );
+    if (!stillUsed) imageCache?.release(reference);
   }
 
   /// Adds a copy of the selected annotation with id [newId], selecting
@@ -162,6 +203,13 @@ class AnnotationController extends ChangeNotifier {
     final copy = duplicateAnnotation(original, newId);
     _pushUndo();
     _annotations.add(copy);
+    if (copy case ImageAnnotation(:final reference)) {
+      // Already cached -- duplicating shares the original's decoded
+      // image, and request() is a no-op for a reference already
+      // present, so this only registers the new instance's use of it
+      // for _releaseIfUnused's reference counting.
+      imageCache?.request(reference);
+    }
     _selectedId = newId;
     notifyListeners();
   }
@@ -169,6 +217,11 @@ class AnnotationController extends ChangeNotifier {
   void clear() {
     if (_annotations.isEmpty) return;
     _pushUndo();
+    for (final a in _annotations) {
+      if (a case ImageAnnotation(:final reference)) {
+        imageCache?.release(reference);
+      }
+    }
     _annotations = [];
     _selectedId = null;
     notifyListeners();
@@ -191,9 +244,37 @@ class AnnotationController extends ChangeNotifier {
   _Snapshot _snapshot() => _Snapshot(List.of(_annotations), _transform);
 
   void _restore(_Snapshot snapshot) {
+    final before = _annotations;
     _annotations = snapshot.annotations;
     _transform = snapshot.transform;
     _dropSelectionIfGone();
+    _reconcileImageCache(before, _annotations);
+  }
+
+  /// Requests every `ImageAnnotation` reference newly present after an
+  /// undo/redo jump, and releases every one that is no longer used by
+  /// anything in the restored list -- undo/redo replaces the whole
+  /// annotation list at once, so a single add/remove's request/release
+  /// calls do not cover the jump; this reconciles the cache against
+  /// wherever history landed instead.
+  void _reconcileImageCache(List<Annotation> before, List<Annotation> after) {
+    if (imageCache == null) return;
+
+    final beforeRefs = {
+      for (final a in before)
+        if (a is ImageAnnotation) a.reference,
+    };
+    final afterRefs = {
+      for (final a in after)
+        if (a is ImageAnnotation) a.reference,
+    };
+
+    for (final ref in afterRefs.difference(beforeRefs)) {
+      imageCache!.request(ref);
+    }
+    for (final ref in beforeRefs.difference(afterRefs)) {
+      imageCache!.release(ref);
+    }
   }
 
   void _pushUndo() {

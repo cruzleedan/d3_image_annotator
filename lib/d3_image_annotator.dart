@@ -27,6 +27,7 @@ export 'src/annotations/annotation_painter.dart';
 export 'src/annotations/annotation_style.dart';
 export 'src/annotations/annotation_tool.dart';
 export 'src/annotations/hit_testing.dart';
+export 'src/annotations/image_annotation_cache.dart';
 
 // Coordinates -- the normalized [0,1] lingua franca
 export 'src/coordinates/coordinate_space.dart';
@@ -37,6 +38,7 @@ export 'src/coordinates/normalized_rect.dart';
 export 'src/geometry/content_rect.dart';
 export 'src/geometry/image_fit.dart';
 export 'src/geometry/image_transform.dart';
+export 'src/geometry/transformed_image_paint.dart';
 
 // Reusable toolbar controls with guaranteed touch targets
 export 'src/ui/annotator_screen.dart';

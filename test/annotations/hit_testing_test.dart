@@ -243,4 +243,68 @@ void main() {
       expect(hit, isNotNull);
     });
   });
+
+  group('image annotations are interactive regardless of decode state '
+      '(WORK-0037)', () {
+    ImageAnnotation image() => ImageAnnotation(
+      id: 'i',
+      style: const AnnotationStyle(),
+      reference: 'never-resolved',
+      rect: NormalizedRect(left: 0.25, top: 0.25, right: 0.75, bottom: 0.75),
+    );
+
+    test('a tap anywhere inside the placement rect hits, with no cache '
+        'involved at all', () {
+      // No ImageAnnotationCache is even constructed here -- hit-testing
+      // must never depend on one, since the placement rect is known
+      // synchronously the instant the annotation is placed.
+      final hit = hitTest(
+        image(),
+        const NormalizedPoint(0.5, 0.5),
+        0.01,
+        0.01,
+      );
+
+      expect(hit, isTrue);
+    });
+
+    test('a tap outside the placement rect misses', () {
+      final hit = hitTest(
+        image(),
+        const NormalizedPoint(0.9, 0.9),
+        0.01,
+        0.01,
+      );
+
+      expect(hit, isFalse);
+    });
+
+    test('always hit anywhere inside, unlike an unfilled rectangle -- '
+        'an image annotation has no outline-only mode', () {
+      final unfilledLikeRect = image();
+      // Centre of the rect, far from any edge -- an outlined rectangle
+      // would miss here, but an image annotation must not.
+      final hit = hitTest(
+        unfilledLikeRect,
+        const NormalizedPoint(0.5, 0.5),
+        0.02,
+        0.02,
+      );
+
+      expect(hit, isTrue);
+    });
+
+    test('hitTestAnnotations finds it via the normal pipeline too', () {
+      final hit = hitTestAnnotations(
+        [image()],
+        const NormalizedPoint(0.5, 0.5),
+        contentRect,
+        pixelPosition: const Offset(200, 200),
+        transform: ImageTransform.identity,
+      );
+
+      expect(hit, isNotNull);
+      expect(hit, isA<ImageAnnotation>());
+    });
+  });
 }

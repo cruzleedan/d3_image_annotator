@@ -46,6 +46,12 @@ void main() {
       position: NormalizedPoint(0.3, 0.4),
       text: 'hello world',
     ),
+    'image': ImageAnnotation(
+      id: 'i1',
+      style: style,
+      reference: 'asset://photos/roof.jpg',
+      rect: NormalizedRect(left: 0.1, top: 0.1, right: 0.6, bottom: 0.5),
+    ),
   };
 
   group('round trip', () {
@@ -347,6 +353,107 @@ void main() {
       );
       final json = document.toJson();
       expect(json['schemaVersion'], greaterThan(1));
+    });
+  });
+
+  group('image (WORK-0037)', () {
+    test('the reference is stored and decoded as a plain string', () {
+      final json = annotationToJson(samples['image']!);
+      expect(json['reference'], 'asset://photos/roof.jpg');
+
+      final restored = annotationFromJson(json) as ImageAnnotation;
+      expect(restored.reference, 'asset://photos/roof.jpg');
+    });
+
+    test('an identity imageTransform is not written to JSON at all', () {
+      // Keeps documents with unadjusted image annotations byte-for-byte
+      // comparable to what a future build without this optimisation
+      // would write, the same convention rotation/fontSize established.
+      final json = annotationToJson(samples['image']!);
+      expect(json.containsKey('imageTransform'), isFalse);
+    });
+
+    test('a non-identity imageTransform round-trips unchanged', () {
+      final withCrop = ImageAnnotation(
+        id: 'i1',
+        style: style,
+        reference: 'asset://photos/roof.jpg',
+        rect: NormalizedRect(left: 0.1, top: 0.1, right: 0.6, bottom: 0.5),
+        imageTransform: ImageTransform(
+          quarterTurns: 1,
+          mirrored: true,
+          cropRect: NormalizedRect(
+            left: 0.2,
+            top: 0.2,
+            right: 0.8,
+            bottom: 0.8,
+          ),
+        ),
+      );
+
+      final restored = annotationFromJson(annotationToJson(withCrop));
+
+      expect(restored, withCrop);
+      expect(
+        (restored as ImageAnnotation).imageTransform,
+        withCrop.imageTransform,
+      );
+    });
+
+    test('an image annotation with no "imageTransform" key decodes as '
+        'identity', () {
+      final json = <String, Object?>{
+        'type': 'image',
+        'id': 'i1',
+        'style': {'color': 0xFFFF0000, 'strokeWidth': 0.01, 'filled': false},
+        'reference': 'ref',
+        'rect': {'left': 0.0, 'top': 0.0, 'right': 1.0, 'bottom': 1.0},
+      };
+
+      final restored = annotationFromJson(json) as ImageAnnotation;
+
+      expect(restored.imageTransform, ImageTransform.identity);
+    });
+
+    test('a rotated image annotation survives encode/decode unchanged', () {
+      final rotated = ImageAnnotation(
+        id: 'i1',
+        style: style,
+        reference: 'ref',
+        rect: NormalizedRect(left: 0.1, top: 0.1, right: 0.6, bottom: 0.5),
+        rotation: 0.9,
+      );
+
+      final restored = annotationFromJson(annotationToJson(rotated));
+
+      expect(restored, rotated);
+      expect((restored as ImageAnnotation).rotation, rotated.rotation);
+    });
+
+    test('a missing "reference" throws rather than defaulting to empty', () {
+      expect(
+        () => annotationFromJson({
+          'type': 'image',
+          'id': 'i1',
+          'style': {'color': 0xFFFF0000, 'strokeWidth': 0.01, 'filled': false},
+          'rect': {'left': 0.0, 'top': 0.0, 'right': 1.0, 'bottom': 1.0},
+        }),
+        throwsA(isA<AnnotationDecodeException>()),
+      );
+    });
+
+    test('the schema version accounts for image annotations too', () {
+      expect(kAnnotationSchemaVersion, greaterThanOrEqualTo(3));
+    });
+
+    test('copyWith preserves imageTransform when not explicitly changed', () {
+      final image = samples['image']! as ImageAnnotation;
+      final moved = image.copyWith(
+        rect: NormalizedRect(left: 0.2, top: 0.2, right: 0.7, bottom: 0.6),
+      );
+
+      expect(moved.imageTransform, image.imageTransform);
+      expect(moved.reference, image.reference);
     });
   });
 
