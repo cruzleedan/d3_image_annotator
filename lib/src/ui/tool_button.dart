@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../annotations/annotation.dart';
 import '../annotations/annotation_controller.dart';
 import '../annotations/annotation_style.dart';
+import '../geometry/image_transform.dart';
 
 /// Minimum touch target, in logical pixels.
 ///
@@ -439,60 +440,116 @@ class D3RestyleBar extends StatelessWidget {
     controller.update(selected.id, selected.copyWithStyle(style));
   }
 
+  void _applyImageTransform(ImageTransform transform) {
+    final image = selected;
+    if (image is ImageAnnotation) {
+      controller.update(image.id, image.copyWith(imageTransform: transform));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final style = selected.style;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final color in kRestyleColors)
-            _ColorSwatch(
-              color: color,
-              selected: style.color.toARGB32() == color.toARGB32(),
-              onTap: () => _apply(style.copyWith(color: color)),
-            ),
-          const SizedBox(width: 8),
-          if (_isText) ...[
-            for (final fontSize in kRestyleFontSizes)
-              _SizeSwatch(
-                value: fontSize,
-                label: 'Font size',
-                selected: style.fontSize == fontSize,
-                onTap: () => _apply(style.copyWith(fontSize: fontSize)),
-              ),
-            const SizedBox(width: 8),
-            for (final background in kRestyleTextBackgrounds)
-              _TextBackgroundSwatch(
-                color: background,
-                selected: style.backgroundColor?.toARGB32() ==
-                    background?.toARGB32(),
-                onTap: () => _apply(
-                  background == null
-                      ? style.copyWith(clearBackgroundColor: true)
-                      : style.copyWith(backgroundColor: background),
-                ),
-              ),
-          ] else ...[
-            for (final width in kRestyleStrokeWidths)
-              _SizeSwatch(
-                value: width,
-                label: 'Stroke width',
-                selected: style.strokeWidth == width,
-                onTap: () => _apply(style.copyWith(strokeWidth: width)),
-              ),
-            if (_supportsFill) ...[
-              const SizedBox(width: 8),
-              _FillToggle(
-                filled: style.filled,
-                onTap: () => _apply(style.copyWith(filled: !style.filled)),
-              ),
-            ],
-          ],
-        ],
+    final image = selected;
+    // Scrolls rather than wraps or shrinks, same reasoning as
+    // D3ToolBar: a text annotation's row (colour + font size +
+    // background swatches) is long enough on a narrow phone to overflow
+    // a fixed-width row, and shrinking the swatches would break their
+    // touch-target guarantee.
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: SizedBox(
+        height: kMinimumTouchTarget,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: image is ImageAnnotation
+              ? _imageControls(image)
+              : [
+                  for (final color in kRestyleColors)
+                    _ColorSwatch(
+                      color: color,
+                      selected: style.color.toARGB32() == color.toARGB32(),
+                      onTap: () => _apply(style.copyWith(color: color)),
+                    ),
+                  const SizedBox(width: 8),
+                  if (_isText) ...[
+                    for (final fontSize in kRestyleFontSizes)
+                      _SizeSwatch(
+                        value: fontSize,
+                        label: 'Font size',
+                        selected: style.fontSize == fontSize,
+                        onTap: () =>
+                            _apply(style.copyWith(fontSize: fontSize)),
+                      ),
+                    const SizedBox(width: 8),
+                    for (final background in kRestyleTextBackgrounds)
+                      _TextBackgroundSwatch(
+                        color: background,
+                        selected:
+                            style.backgroundColor?.toARGB32() ==
+                            background?.toARGB32(),
+                        onTap: () => _apply(
+                          background == null
+                              ? style.copyWith(clearBackgroundColor: true)
+                              : style.copyWith(backgroundColor: background),
+                        ),
+                      ),
+                  ] else ...[
+                    for (final width in kRestyleStrokeWidths)
+                      _SizeSwatch(
+                        value: width,
+                        label: 'Stroke width',
+                        selected: style.strokeWidth == width,
+                        onTap: () =>
+                            _apply(style.copyWith(strokeWidth: width)),
+                      ),
+                    if (_supportsFill) ...[
+                      const SizedBox(width: 8),
+                      _FillToggle(
+                        filled: style.filled,
+                        onTap: () =>
+                            _apply(style.copyWith(filled: !style.filled)),
+                      ),
+                    ],
+                  ],
+                ],
+        ),
       ),
     );
+  }
+
+  /// Controls for an [ImageAnnotation]'s own crop/mirror -- deliberately
+  /// distinct from the document-level Adjust toolbar (WORK-0026) both
+  /// visually (this row, not that toolbar) and functionally (mutates
+  /// only this annotation's `imageTransform`, never
+  /// `AnnotationController.transform`), so the user cannot mistake
+  /// "crop this picture" for "crop the whole canvas" (WORK-0037's
+  /// decision). No colour/stroke/fill controls apply to an image the
+  /// way they do to a drawn shape.
+  List<Widget> _imageControls(ImageAnnotation image) {
+    final transform = image.imageTransform;
+    return [
+      _ImageAdjustButton(
+        icon: Icons.rotate_90_degrees_cw,
+        tooltip: 'Rotate image',
+        onTap: () =>
+            _applyImageTransform(transform.rotatedClockwise()),
+      ),
+      _ImageAdjustButton(
+        icon: Icons.flip,
+        tooltip: 'Mirror image',
+        selected: transform.mirrored,
+        onTap: () =>
+            _applyImageTransform(transform.withMirrored(!transform.mirrored)),
+      ),
+      _ImageAdjustButton(
+        icon: Icons.crop_free,
+        tooltip: 'Reset image adjustments',
+        onTap: transform.isIdentity
+            ? null
+            : () => _applyImageTransform(ImageTransform.identity),
+      ),
+    ];
   }
 }
 
@@ -617,6 +674,57 @@ class _FillToggle extends StatelessWidget {
             filled ? Icons.square : Icons.square_outlined,
             color: filled ? Colors.amber : Colors.white70,
             size: 22,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One control in an [ImageAnnotation]'s own crop/mirror row
+/// (WORK-0037) -- rotate, mirror, or reset that annotation's
+/// `imageTransform`, distinct from the document-level Adjust toolbar.
+class _ImageAdjustButton extends StatelessWidget {
+  const _ImageAdjustButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+    this.selected = false,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback? onTap;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      selected: selected,
+      label: tooltip,
+      excludeSemantics: true,
+      child: Tooltip(
+        message: tooltip,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              minWidth: kMinimumTouchTarget,
+              minHeight: kMinimumTouchTarget,
+            ),
+            child: Icon(
+              icon,
+              color: !enabled
+                  ? Colors.white24
+                  : selected
+                  ? Colors.amber
+                  : Colors.white70,
+              size: 22,
+            ),
           ),
         ),
       ),

@@ -402,4 +402,121 @@ void main() {
           reason: 'a 10px miss must be forgiven at any image size');
     });
   });
+
+  group('image annotations (WORK-0037)', () {
+    ImageAnnotation image() => ImageAnnotation(
+      id: 'i',
+      style: const AnnotationStyle(),
+      reference: 'ref',
+      rect: NormalizedRect(left: 0.25, top: 0.25, right: 0.75, bottom: 0.75),
+    );
+
+    test('offers four corner grips, exactly like a rectangle', () {
+      expect(gripsOf(image()).keys, {
+        AnnotationGrip.topLeft,
+        AnnotationGrip.topRight,
+        AnnotationGrip.bottomLeft,
+        AnnotationGrip.bottomRight,
+      });
+    });
+
+    test('a touch on a corner finds that corner', () {
+      // rect corner (0.25, 0.25) is pixel (100, 100).
+      final grip = gripAt(
+        image(),
+        const Offset(100, 100),
+        contentRect,
+        ImageTransform.identity,
+      );
+
+      expect(grip, AnnotationGrip.topLeft);
+    });
+
+    test('corner-drag resizes the placement rect, not an internal crop', () {
+      final resized = resizeAnnotation(
+        image(),
+        AnnotationGrip.topLeft,
+        const NormalizedPoint(0.1, 0.1),
+      )! as ImageAnnotation;
+
+      expect(resized.rect.left, closeTo(0.1, 1e-9));
+      expect(resized.rect.top, closeTo(0.1, 1e-9));
+      expect(resized.rect.right, closeTo(0.75, 1e-9),
+          reason: 'the opposite corner must not move');
+      expect(resized.imageTransform, ImageTransform.identity,
+          reason: 'resize must not touch the internal crop/mirror');
+    });
+
+    test('resize refuses a corner dragged past its opposite, like every '
+        'other bounded type', () {
+      final resized = resizeAnnotation(
+        image(),
+        AnnotationGrip.topLeft,
+        const NormalizedPoint(0.75, 0.75),
+      );
+
+      expect(resized, isNull);
+    });
+
+    test('rotating changes only rotation, leaving rect and imageTransform '
+        'untouched', () {
+      final original = image();
+      final positions = gripPositionsInPixels(
+        original,
+        contentRect,
+        ImageTransform.identity,
+      );
+      final handle = positions[AnnotationGrip.rotate]!;
+      final mappedRect = mapRectToPixels(
+        original.bounds,
+        contentRect,
+        ImageTransform.identity,
+      );
+      final center = mappedRect.center;
+      final dx = handle.dx - center.dx;
+      final dy = handle.dy - center.dy;
+      // Rotate the handle's own offset by +90 degrees.
+      final dragged = Offset(center.dx - dy, center.dy + dx);
+
+      final rotated = rotateAnnotation(
+        original,
+        dragged,
+        contentRect,
+        ImageTransform.identity,
+      )! as ImageAnnotation;
+
+      expect(rotated.rect, original.rect);
+      expect(rotated.imageTransform, original.imageTransform);
+      expect(rotated.rotation, closeTo(math.pi / 2, 1e-6));
+    });
+
+    test('translateAnnotation moves the placement rect', () {
+      final moved = translateAnnotation(image(), 0.1, 0.1)! as ImageAnnotation;
+
+      expect(moved.rect.left, closeTo(0.35, 1e-9));
+      expect(moved.rect.top, closeTo(0.35, 1e-9));
+    });
+
+    test('translateAnnotation refuses a move that would leave the image', () {
+      expect(translateAnnotation(image(), 0.5, 0.5), isNull);
+    });
+
+    test('duplicateAnnotation preserves reference and imageTransform', () {
+      final withCrop = ImageAnnotation(
+        id: 'i',
+        style: const AnnotationStyle(),
+        reference: 'ref',
+        rect: NormalizedRect(left: 0.25, top: 0.25, right: 0.6, bottom: 0.6),
+        imageTransform: const ImageTransform(mirrored: true),
+      );
+
+      final copy = duplicateAnnotation(withCrop, 'i2') as ImageAnnotation;
+
+      expect(copy.id, 'i2');
+      expect(copy.reference, 'ref');
+      expect(copy.imageTransform, const ImageTransform(mirrored: true));
+      expect(copy.rect, isNot(withCrop.rect),
+          reason: 'the duplicate must be offset, not exactly overlapping');
+    });
+  });
 }

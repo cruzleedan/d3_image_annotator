@@ -353,7 +353,9 @@ enum AnnotationGrip {
 /// answer rather than an exception.
 Map<AnnotationGrip, NormalizedPoint> gripsOf(Annotation annotation) {
   return switch (annotation) {
-    RectangleAnnotation(:final rect) || CircleAnnotation(:final rect) => {
+    RectangleAnnotation(:final rect) ||
+    CircleAnnotation(:final rect) ||
+    ImageAnnotation(:final rect) => {
       AnnotationGrip.topLeft: NormalizedPoint(rect.left, rect.top),
       AnnotationGrip.topRight: NormalizedPoint(rect.right, rect.top),
       AnnotationGrip.bottomLeft: NormalizedPoint(rect.left, rect.bottom),
@@ -515,6 +517,14 @@ Annotation? resizeAnnotation(
       final resized = _resizeRect(rect, grip, point, minimumExtent);
       return resized == null ? null : annotation.copyWith(rect: resized);
 
+    case ImageAnnotation(:final rect):
+      // Corner-drag changes only the placement rect, stretching or
+      // shrinking the displayed image to fit -- the image's own
+      // internal crop/mirror is a separate action via dedicated
+      // controls, not a second meaning on this same gesture (WORK-0037).
+      final resized = _resizeRect(rect, grip, point, minimumExtent);
+      return resized == null ? null : annotation.copyWith(rect: resized);
+
     case ArrowAnnotation():
       // Endpoints, so an arrow keeps its direction and can be reversed
       // by dragging one end past the other -- which is meaningful for a
@@ -582,6 +592,7 @@ Annotation? rotateAnnotation(
     RectangleAnnotation() => annotation.copyWith(rotation: rotation),
     CircleAnnotation() => annotation.copyWith(rotation: rotation),
     TextAnnotation() => annotation.copyWith(rotation: rotation),
+    ImageAnnotation() => annotation.copyWith(rotation: rotation),
     ArrowAnnotation() || FreehandAnnotation() => null,
   };
 }

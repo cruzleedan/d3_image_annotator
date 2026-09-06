@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:typed_data';
+
 import 'package:d3_image_annotator/d3_image_annotator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -839,6 +842,127 @@ void main() {
       expect(rotated.rotation, isNot(0.0));
       expect(rotated.position, existing.position,
           reason: 'rotating must not move the anchor position');
+    });
+  });
+
+  group('image annotations (WORK-0037)', () {
+    ImageAnnotation image() => ImageAnnotation(
+      id: 'target',
+      style: const AnnotationStyle(),
+      reference: 'never-resolved',
+      rect: NormalizedRect(left: 0.3, top: 0.3, right: 0.7, bottom: 0.7),
+    );
+
+    testWidgets(
+      'is selectable and movable with no ImageAnnotationCache at all',
+      (tester) async {
+        final controller = AnnotationController()..add(image());
+        await pumpOverlay(
+          tester,
+          tool: AnnotationTool.rectangle,
+          controller: controller,
+        );
+
+        await tester.tapAt(at(0.5, 0.5));
+        await tester.pumpAndSettle();
+        expect(controller.selectedId, 'target');
+
+        await tester.dragFrom(at(0.5, 0.5), at(0.6, 0.6) - at(0.5, 0.5));
+        await tester.pumpAndSettle();
+
+        final moved = controller.annotations.single as ImageAnnotation;
+        expect(moved.rect.left, greaterThan(0.3));
+      },
+    );
+
+    testWidgets(
+      'is selectable and movable while its image is still loading',
+      (tester) async {
+        final cache = ImageAnnotationCache(
+          resolver: (ref) => Completer<Uint8List>().future, // never resolves
+        );
+        addTearDown(cache.dispose);
+        final controller = AnnotationController(imageCache: cache)
+          ..add(image());
+        // The add() above already called cache.request(); confirm it is
+        // genuinely still loading, not a test that accidentally proves
+        // nothing.
+        expect(
+          cache.entryFor('never-resolved')?.state,
+          ImageAnnotationLoadState.loading,
+        );
+
+        await pumpOverlay(
+          tester,
+          tool: AnnotationTool.rectangle,
+          controller: controller,
+        );
+
+        await tester.tapAt(at(0.5, 0.5));
+        await tester.pumpAndSettle();
+        expect(controller.selectedId, 'target');
+
+        await tester.dragFrom(at(0.5, 0.5), at(0.6, 0.6) - at(0.5, 0.5));
+        await tester.pumpAndSettle();
+
+        final moved = controller.annotations.single as ImageAnnotation;
+        expect(moved.rect.left, greaterThan(0.3));
+      },
+    );
+
+    testWidgets('corner-drag resizes the placement rect', (tester) async {
+      final controller = AnnotationController()..add(image());
+      controller.select('target');
+      await pumpOverlay(
+        tester,
+        tool: AnnotationTool.rectangle,
+        controller: controller,
+      );
+
+      // Top-left corner is at (0.3, 0.3).
+      await tester.dragFrom(at(0.3, 0.3), at(0.1, 0.1) - at(0.3, 0.3));
+      await tester.pumpAndSettle();
+
+      final resized = controller.annotations.single as ImageAnnotation;
+      expect(resized.rect.left, closeTo(0.1, 0.05));
+      expect(resized.rect.right, closeTo(0.7, 1e-6),
+          reason: 'the opposite corner must not move');
+    });
+
+    testWidgets('can be deleted via the floating x, undoably', (
+      tester,
+    ) async {
+      final controller = AnnotationController()..add(image());
+      controller.select('target');
+      await pumpOverlay(
+        tester,
+        tool: AnnotationTool.rectangle,
+        controller: controller,
+      );
+
+      await tester.tap(find.byTooltip('Delete'));
+      await tester.pumpAndSettle();
+
+      expect(controller.annotations, isEmpty);
+      controller.undo();
+      expect(controller.annotations.single.id, 'target');
+    });
+
+    testWidgets('can be duplicated via the floating +1', (tester) async {
+      final controller = AnnotationController()..add(image());
+      controller.select('target');
+      await pumpOverlay(
+        tester,
+        tool: AnnotationTool.rectangle,
+        controller: controller,
+      );
+
+      await tester.tap(find.byTooltip('Duplicate'));
+      await tester.pumpAndSettle();
+
+      expect(controller.annotations, hasLength(2));
+      final duplicate = controller.annotations.last as ImageAnnotation;
+      expect(duplicate.reference, 'never-resolved');
     });
   });
 }

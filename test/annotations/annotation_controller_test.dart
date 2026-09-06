@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'dart:ui' show Color;
 
 import 'package:d3_image_annotator/d3_image_annotator.dart';
@@ -439,4 +440,170 @@ void main() {
       expect(notifications, 2);
     });
   });
+
+  group('ImageAnnotationCache wiring (WORK-0037)', () {
+    ImageAnnotation image(String id, {String reference = 'ref-a'}) {
+      return ImageAnnotation(
+        id: id,
+        style: const AnnotationStyle(),
+        reference: reference,
+        rect: NormalizedRect(left: 0.1, top: 0.1, right: 0.5, bottom: 0.5),
+      );
+    }
+
+    test('adding an image annotation requests its reference', () async {
+      final requested = <String>[];
+      final cache = ImageAnnotationCache(
+        resolver: (ref) async {
+          requested.add(ref);
+          return Uint8List(0);
+        },
+      );
+      final c = AnnotationController(imageCache: cache);
+
+      c.add(image('i1'));
+      expect(requested, ['ref-a']);
+
+      await pumpEventQueue();
+      cache.dispose();
+    });
+
+    test('the initial annotation list also requests references', () async {
+      final requested = <String>[];
+      final cache = ImageAnnotationCache(
+        resolver: (ref) async {
+          requested.add(ref);
+          return Uint8List(0);
+        },
+      );
+
+      AnnotationController(imageCache: cache, initial: [image('i1')]);
+      expect(requested, ['ref-a']);
+
+      await pumpEventQueue();
+      cache.dispose();
+    });
+
+    test('removing the only annotation using a reference releases it',
+        () async {
+      final released = <String>[];
+      final cache = _RecordingCache(onRelease: released.add);
+      final c = AnnotationController(imageCache: cache)..add(image('i1'));
+
+      c.remove('i1');
+      expect(released, ['ref-a']);
+
+      await pumpEventQueue();
+      cache.dispose();
+    });
+
+    test('removing one of two annotations sharing a reference does not '
+        'release it', () async {
+      final released = <String>[];
+      final cache = _RecordingCache(onRelease: released.add);
+      final c = AnnotationController(imageCache: cache)
+        ..add(image('i1', reference: 'shared'))
+        ..add(image('i2', reference: 'shared'));
+
+      c.remove('i1');
+
+      expect(released, isEmpty,
+          reason: 'i2 still uses "shared"; it must not be evicted');
+
+      c.remove('i2');
+      expect(released, ['shared']);
+
+      await pumpEventQueue();
+      cache.dispose();
+    });
+
+    test('clear() releases every image annotation reference', () async {
+      final released = <String>[];
+      final cache = _RecordingCache(onRelease: released.add);
+      final c = AnnotationController(imageCache: cache)
+        ..add(image('i1', reference: 'a'))
+        ..add(image('i2', reference: 'b'));
+
+      c.clear();
+      expect(released, unorderedEquals(['a', 'b']));
+
+      await pumpEventQueue();
+      cache.dispose();
+    });
+
+    test('undo past an add releases the reference; redo re-requests it',
+        () async {
+      final requested = <String>[];
+      final released = <String>[];
+      final cache = _RecordingCache(
+        onRequest: requested.add,
+        onRelease: released.add,
+      );
+      final c = AnnotationController(imageCache: cache)..add(image('i1'));
+
+      expect(requested, ['ref-a']);
+
+      c.undo();
+      expect(released, ['ref-a'],
+          reason: 'undoing the add must release the now-gone reference');
+
+      c.redo();
+      expect(requested, ['ref-a', 'ref-a'],
+          reason: 'redo brings the annotation back and must re-request it');
+
+      await pumpEventQueue();
+      cache.dispose();
+    });
+
+    test('duplicateSelected shares the cache entry of the original',
+        () async {
+      final requested = <String>[];
+      final cache = _RecordingCache(onRequest: requested.add);
+      final c = AnnotationController(imageCache: cache)..add(image('i1'));
+      c.select('i1');
+      requested.clear();
+
+      c.duplicateSelected('i2');
+
+      // request() is called (harmlessly a no-op if already cached) so
+      // the duplicate registers its own use of the shared reference for
+      // reference-counted release later.
+      expect(requested, ['ref-a']);
+      expect(c.annotations, hasLength(2));
+
+      await pumpEventQueue();
+      cache.dispose();
+    });
+
+    test('a controller with no imageCache works normally for image '
+        'annotations (just no decode happens)', () {
+      final c = AnnotationController()..add(image('i1'));
+      expect(c.annotations, hasLength(1));
+      c.remove('i1');
+      expect(c.annotations, isEmpty);
+    });
+  });
+}
+
+/// A minimal [ImageAnnotationCache] subclass for observing
+/// request()/release() calls directly, without needing a real
+/// asynchronous decode to complete.
+class _RecordingCache extends ImageAnnotationCache {
+  _RecordingCache({this.onRequest, this.onRelease})
+    : super(resolver: (ref) async => Uint8List(0));
+
+  final void Function(String reference)? onRequest;
+  final void Function(String reference)? onRelease;
+
+  @override
+  void request(String reference) {
+    onRequest?.call(reference);
+    super.request(reference);
+  }
+
+  @override
+  void release(String reference) {
+    onRelease?.call(reference);
+    super.release(reference);
+  }
 }

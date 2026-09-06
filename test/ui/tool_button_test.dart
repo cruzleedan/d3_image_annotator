@@ -496,6 +496,153 @@ void main() {
     });
   });
 
+  group('restyle bar: image controls (WORK-0037)', () {
+    Future<AnnotationController> pumpRestyleImage(
+      WidgetTester tester,
+      ImageAnnotation annotation,
+    ) async {
+      final controller = AnnotationController()
+        ..add(annotation)
+        ..select(annotation.id);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            // D3RestyleBar reads `selected` as a fixed snapshot, not
+            // live from the controller (documented on its own field) --
+            // wrapped in AnimatedBuilder here so a mutation is reflected
+            // on the next frame, the same way D3AnnotatorScreen's real
+            // usage already rebuilds it on every controller change.
+            body: AnimatedBuilder(
+              animation: controller,
+              builder: (context, _) => D3RestyleBar(
+                controller: controller,
+                selected: controller.selected!,
+              ),
+            ),
+          ),
+        ),
+      );
+      return controller;
+    }
+
+    ImageAnnotation image() => ImageAnnotation(
+      id: 'i',
+      style: const AnnotationStyle(),
+      reference: 'ref',
+      rect: NormalizedRect(left: 0.1, top: 0.1, right: 0.5, bottom: 0.5),
+    );
+
+    testWidgets('shows rotate/mirror/reset instead of colour/stroke/fill '
+        'controls', (tester) async {
+      await pumpRestyleImage(tester, image());
+
+      expect(find.bySemanticsLabel('Rotate image'), findsOneWidget);
+      expect(find.bySemanticsLabel('Mirror image'), findsOneWidget);
+      expect(find.bySemanticsLabel('Reset image adjustments'), findsOneWidget);
+      expect(find.bySemanticsLabel('Color'), findsNothing);
+      expect(find.bySemanticsLabel('Stroke width'), findsNothing);
+      expect(find.bySemanticsLabel('Fill'), findsNothing);
+    });
+
+    testWidgets('rotate mutates only imageTransform, undoably', (
+      tester,
+    ) async {
+      final controller = await pumpRestyleImage(tester, image());
+
+      await tester.tap(find.bySemanticsLabel('Rotate image'));
+      await tester.pumpAndSettle();
+
+      final rotated = controller.annotations.single as ImageAnnotation;
+      expect(rotated.imageTransform.quarterTurns, 1);
+      expect(rotated.rect, image().rect,
+          reason: 'the placement rect must not change');
+      expect(controller.transform, ImageTransform.identity,
+          reason: "the document-level transform must be untouched -- "
+              'this is the annotation\'s own crop, not the canvas\'s');
+
+      controller.undo();
+      expect(
+        (controller.annotations.single as ImageAnnotation)
+            .imageTransform
+            .quarterTurns,
+        0,
+      );
+    });
+
+    testWidgets('mirror toggles imageTransform.mirrored, undoably', (
+      tester,
+    ) async {
+      final controller = await pumpRestyleImage(tester, image());
+
+      await tester.tap(find.bySemanticsLabel('Mirror image'));
+      await tester.pumpAndSettle();
+
+      expect(
+        (controller.annotations.single as ImageAnnotation)
+            .imageTransform
+            .mirrored,
+        isTrue,
+      );
+
+      controller.undo();
+      expect(
+        (controller.annotations.single as ImageAnnotation)
+            .imageTransform
+            .mirrored,
+        isFalse,
+      );
+    });
+
+    testWidgets('reset is disabled at identity and enabled after an '
+        'adjustment', (tester) async {
+      final controller = await pumpRestyleImage(tester, image());
+
+      final resetBefore = tester.getSemantics(
+        find.bySemanticsLabel('Reset image adjustments'),
+      );
+      expect(resetBefore.flagsCollection.isEnabled.name, 'isFalse');
+
+      await tester.tap(find.bySemanticsLabel('Mirror image'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.bySemanticsLabel('Reset image adjustments'));
+      await tester.pumpAndSettle();
+
+      expect(
+        (controller.annotations.single as ImageAnnotation).imageTransform,
+        ImageTransform.identity,
+      );
+    });
+
+    testWidgets(
+      'the document-level Adjust toolbar is unaffected by an image '
+      "annotation's own crop/mirror controls",
+      (tester) async {
+        // D3AnnotatorScreen's own Adjust group operates on
+        // controller.transform, never on a selected annotation's
+        // imageTransform -- covered at the controller level here rather
+        // than requiring a full D3AnnotatorScreen pump, since the two
+        // are already structurally separate fields (WORK-0037's
+        // decision).
+        final controller = await pumpRestyleImage(tester, image());
+        controller.rotateClockwise();
+
+        await tester.tap(find.bySemanticsLabel('Mirror image'));
+        await tester.pumpAndSettle();
+
+        expect(controller.transform.quarterTurns, 1,
+            reason: 'the earlier document-level rotate must be untouched');
+        expect(
+          (controller.annotations.single as ImageAnnotation)
+              .imageTransform
+              .mirrored,
+          isTrue,
+        );
+      },
+    );
+  });
+
   group('close button', () {
     testWidgets('reports a tap and meets the touch minimum', (tester) async {
       // An editing surface needs a visible way out. The system back

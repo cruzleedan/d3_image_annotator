@@ -2,6 +2,7 @@ import 'package:meta/meta.dart';
 
 import '../coordinates/normalized_point.dart';
 import '../coordinates/normalized_rect.dart';
+import '../geometry/image_transform.dart';
 import 'annotation_style.dart';
 
 /// A single mark drawn on an image.
@@ -334,17 +335,124 @@ final class TextAnnotation extends Annotation {
       'rotation: $rotation)';
 }
 
+/// An image placed as an annotation -- positioned and sized like a
+/// rectangle, with its own independent crop/mirror (WORK-0037).
+///
+/// **[reference] is opaque.** This package never opens, reads, or
+/// validates it -- resolving it to actual image bytes is entirely the
+/// consumer app's job, via a resolver function supplied to
+/// `ImageAnnotationCache`. Deliberately not specified as a filesystem
+/// path: a raw path is fragile across sandboxed storage, OS-level
+/// scoped storage, app-version migrations, and cloud-restored backups.
+/// A consumer app is free to use a database row id, an asset-bundle
+/// key, or a content-provider URI instead -- this field's generic name
+/// keeps the package's contract from assuming which.
+///
+/// **A consequence stated plainly, not softened:** a saved
+/// `AnnotationDocument` containing an `ImageAnnotation` is not
+/// self-contained. Handing the JSON to someone else, or reopening it
+/// after the referenced image is gone, means the annotation exists as
+/// data but cannot be painted -- `ImageAnnotationCache` surfaces that
+/// as a decode failure (see its own doc comment), not a silent gap.
+final class ImageAnnotation extends Annotation {
+  const ImageAnnotation({
+    required super.id,
+    required super.style,
+    required this.reference,
+    required this.rect,
+    this.rotation = 0.0,
+    this.imageTransform = ImageTransform.identity,
+  });
+
+  /// Opaque, consumer-defined -- see the class doc comment. This
+  /// package treats it as a plain string with no structure.
+  final String reference;
+
+  /// Where the image sits on the canvas, matching
+  /// `RectangleAnnotation.rect`'s convention.
+  ///
+  /// **Not the same thing as [imageTransform]'s crop.** [rect] is this
+  /// annotation's own placement in document space -- what a corner-drag
+  /// resizes (WORK-0037's decision: corner-drag changes only this,
+  /// stretching or shrinking the displayed image to fit, the same as
+  /// `_drawTransformedSource` already does for the document
+  /// background). [imageTransform]'s crop instead changes *what part of
+  /// the source image* is shown inside that placement, a separate
+  /// action reached through its own controls.
+  final NormalizedRect rect;
+
+  /// See [RectangleAnnotation.rotation] -- same convention.
+  final double rotation;
+
+  /// This instance's own crop/mirror, independent of the *document's*
+  /// `AnnotationController.transform` (WORK-0026) applied to the
+  /// background. Selecting an image annotation and adjusting its crop
+  /// must never touch the document-level transform, and vice versa --
+  /// the two are deliberately kept as separate `ImageTransform` values
+  /// rather than one shared field, so the user cannot confuse "crop
+  /// this picture" with "crop the whole canvas."
+  final ImageTransform imageTransform;
+
+  @override
+  NormalizedRect get bounds => rect;
+
+  @override
+  ImageAnnotation copyWithStyle(AnnotationStyle style) => ImageAnnotation(
+    id: id,
+    style: style,
+    reference: reference,
+    rect: rect,
+    rotation: rotation,
+    imageTransform: imageTransform,
+  );
+
+  ImageAnnotation copyWith({
+    NormalizedRect? rect,
+    double? rotation,
+    ImageTransform? imageTransform,
+  }) => ImageAnnotation(
+    id: id,
+    style: style,
+    reference: reference,
+    rect: rect ?? this.rect,
+    rotation: rotation ?? this.rotation,
+    imageTransform: imageTransform ?? this.imageTransform,
+  );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ImageAnnotation &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          style == other.style &&
+          reference == other.reference &&
+          rect == other.rect &&
+          rotation == other.rotation &&
+          imageTransform == other.imageTransform;
+
+  @override
+  int get hashCode =>
+      Object.hash(id, style, reference, rect, rotation, imageTransform);
+
+  @override
+  String toString() =>
+      'ImageAnnotation($id, ref: $reference, $rect, rotation: $rotation)';
+}
+
 /// [annotation]'s rotation (WORK-0033), or `0.0` for a type that has
 /// none.
 ///
-/// `RectangleAnnotation`/`CircleAnnotation`/`TextAnnotation` carry a
-/// `rotation` field; consolidated here rather than repeating this same
-/// `switch` at every site that needs to know whether a shape is rotated
-/// (the painter, hit-testing, and floating shape controls all do).
+/// `RectangleAnnotation`/`CircleAnnotation`/`TextAnnotation`/
+/// `ImageAnnotation` carry a `rotation` field; consolidated here rather
+/// than repeating this same `switch` at every site that needs to know
+/// whether a shape is rotated (the painter, hit-testing, and floating
+/// shape controls all do).
 double rotationOf(Annotation annotation) => switch (annotation) {
   RectangleAnnotation(:final rotation) => rotation,
   CircleAnnotation(:final rotation) => rotation,
   TextAnnotation(:final rotation) => rotation,
+  ImageAnnotation(:final rotation) => rotation,
   ArrowAnnotation() || FreehandAnnotation() => 0.0,
 };
 
@@ -421,6 +529,22 @@ Annotation? translateAnnotation(Annotation annotation, double dx, double dy) {
       return annotation.copyWith(
         position: NormalizedPoint(position.x + dx, position.y + dy),
       );
+
+    case ImageAnnotation(:final rect):
+      if (!inRange(rect.left + dx) ||
+          !inRange(rect.right + dx) ||
+          !inRange(rect.top + dy) ||
+          !inRange(rect.bottom + dy)) {
+        return null;
+      }
+      return annotation.copyWith(
+        rect: NormalizedRect(
+          left: rect.left + dx,
+          top: rect.top + dy,
+          right: rect.right + dx,
+          bottom: rect.bottom + dy,
+        ),
+      );
   }
 }
 
@@ -456,6 +580,21 @@ Annotation duplicateAnnotation(Annotation annotation, String newId) {
         position: position,
         text: text,
         rotation: rotation,
+      ),
+    ImageAnnotation(
+      :final style,
+      :final reference,
+      :final rect,
+      :final rotation,
+      :final imageTransform,
+    ) =>
+      ImageAnnotation(
+        id: newId,
+        style: style,
+        reference: reference,
+        rect: rect,
+        rotation: rotation,
+        imageTransform: imageTransform,
       ),
   };
   return translateAnnotation(withId, kDuplicateOffset, kDuplicateOffset) ??

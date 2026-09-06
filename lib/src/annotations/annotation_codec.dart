@@ -4,6 +4,7 @@ import 'package:meta/meta.dart';
 
 import '../coordinates/normalized_point.dart';
 import '../coordinates/normalized_rect.dart';
+import '../geometry/image_transform.dart';
 import 'annotation.dart';
 import 'annotation_style.dart';
 
@@ -14,14 +15,15 @@ import 'annotation_style.dart';
 /// later means guessing at unversioned data already sitting in a
 /// database somewhere.
 ///
-/// Bumped to 2 for `TextAnnotation` (WORK-0034) -- a genuinely new
-/// annotation `type` value a version-1 reader has never seen, unlike
+/// Bumped to 2 for `TextAnnotation` (WORK-0034), then to 3 for
+/// `ImageAnnotation` (WORK-0037) -- each a genuinely new annotation
+/// `type` value a reader of the previous version has never seen, unlike
 /// WORK-0033's `rotation` field, which stayed backward-compatible as an
 /// optional key on existing types without needing a version bump at
 /// all. A document written by this build is refused by a build that
-/// only understands version 1, loudly, rather than silently dropping
-/// every text annotation it contains.
-const int kAnnotationSchemaVersion = 2;
+/// only understands an earlier version, loudly, rather than silently
+/// dropping every annotation of the newer type it contains.
+const int kAnnotationSchemaVersion = 3;
 
 /// Thrown when a payload cannot be decoded.
 ///
@@ -206,6 +208,23 @@ Map<String, Object?> annotationToJson(Annotation annotation) {
       'text': text,
       if (rotation != 0.0) 'rotation': rotation,
     },
+    ImageAnnotation(
+      :final reference,
+      :final rect,
+      :final rotation,
+      :final imageTransform,
+    ) => {
+      ...base,
+      'type': 'image',
+      'reference': reference,
+      'rect': _rectToJson(rect),
+      if (rotation != 0.0) 'rotation': rotation,
+      // Omitted at identity, the same convention rotation/fontSize
+      // already established: the overwhelmingly common case (an image
+      // placed with no internal crop/mirror of its own) costs nothing
+      // extra on the wire.
+      if (!imageTransform.isIdentity) 'imageTransform': imageTransform.toJson(),
+    },
   };
 }
 
@@ -274,6 +293,24 @@ Annotation annotationFromJson(Map<String, Object?> json) {
         position: _pointFromJson(_asMap(json['position'], 'position')),
         text: text,
         rotation: _rotationFromJson(json['rotation']),
+      );
+    case 'image':
+      final reference = json['reference'];
+      if (reference is! String) {
+        throw const AnnotationDecodeException(
+          'image annotation needs a string "reference"',
+        );
+      }
+      final rawTransform = json['imageTransform'];
+      return ImageAnnotation(
+        id: id,
+        style: style,
+        reference: reference,
+        rect: _rectFromJson(_asMap(json['rect'], 'rect')),
+        rotation: _rotationFromJson(json['rotation']),
+        imageTransform: rawTransform == null
+            ? ImageTransform.identity
+            : ImageTransform.fromJson(_asMap(rawTransform, 'imageTransform')),
       );
     default:
       throw AnnotationDecodeException(

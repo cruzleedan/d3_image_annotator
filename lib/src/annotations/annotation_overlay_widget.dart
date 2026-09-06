@@ -294,6 +294,12 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
         // drag phase at all (WORK-0034), so _onPanStart never assigns
         // one to _draft in the first place.
         TextAnnotation() => draft,
+        // Unreachable for the same reason: this package provides no
+        // drawing tool that creates an ImageAnnotation (WORK-0037
+        // deliberately ships no image-picker UI) -- a consumer app
+        // places one directly via `AnnotationController.add`, never
+        // through this drag-draft lifecycle.
+        ImageAnnotation() => draft,
       };
     });
   }
@@ -503,6 +509,7 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
                         contentRect: contentRect,
                         selectedId: widget.controller.selectedId,
                         transform: widget.imageTransform,
+                        imageCache: widget.controller.imageCache,
                       ),
                     ),
                   ),
@@ -578,6 +585,9 @@ bool _isDegenerate(Annotation annotation) {
     // (see _commitTextEdit's own empty-string check instead), but the
     // case is needed to keep this switch exhaustive.
     TextAnnotation() => false,
+    // Same reasoning: this package has no drag-draft gesture that
+    // produces an ImageAnnotation (WORK-0037).
+    ImageAnnotation() => false,
   };
 }
 
@@ -609,6 +619,24 @@ Annotation _withId(Annotation annotation, String id) {
         position: position,
         text: text,
         rotation: rotation,
+      ),
+    // Same reasoning: an ImageAnnotation never reaches this function
+    // either, since this package places one only via
+    // `AnnotationController.add` with its final id already supplied.
+    ImageAnnotation(
+      :final style,
+      :final reference,
+      :final rect,
+      :final rotation,
+      :final imageTransform,
+    ) =>
+      ImageAnnotation(
+        id: id,
+        style: style,
+        reference: reference,
+        rect: rect,
+        rotation: rotation,
+        imageTransform: imageTransform,
       ),
   };
 }
