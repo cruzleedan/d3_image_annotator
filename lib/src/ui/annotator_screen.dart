@@ -195,22 +195,35 @@ class _D3AnnotatorScreenState extends State<D3AnnotatorScreen> {
                 ),
               )
             else ...[
-              AnimatedBuilder(
-                animation: widget.controller,
-                builder: (context, _) {
-                  final selected = widget.controller.selected;
-                  // Only while something is selected -- restyling a
-                  // shape that does not exist yet has no meaning, and
-                  // showing this bar the rest of the time would leave it
-                  // permanently visible but permanently useless.
-                  if (selected == null) return const SizedBox.shrink();
-                  return _ControlSurface(
-                    child: D3RestyleBar(
-                      controller: widget.controller,
-                      selected: selected,
-                    ),
-                  );
-                },
+              // A fixed-height slot, always present, rather than
+              // collapsing to zero height when nothing is selected: this
+              // Column's total height feeds directly into the image
+              // viewport's own size above (via Expanded), so a row that
+              // pops in and out at its full height was reported
+              // on-device as a jarring resize of the image every time
+              // selection changed -- the image viewport must never
+              // resize as a side effect of what the restyle bar happens
+              // to be showing.
+              SizedBox(
+                height: kMinimumTouchTarget,
+                child: AnimatedBuilder(
+                  animation: widget.controller,
+                  builder: (context, _) {
+                    final selected = widget.controller.selected;
+                    // Only while something is selected -- restyling a
+                    // shape that does not exist yet has no meaning. The
+                    // slot's height stays reserved either way; only its
+                    // content (or lack of it) changes.
+                    return _ControlSurface(
+                      child: selected == null
+                          ? const SizedBox.expand()
+                          : D3RestyleBar(
+                              controller: widget.controller,
+                              selected: selected,
+                            ),
+                    );
+                  },
+                ),
               ),
               _ControlSurface(
                 child: _BottomBars(

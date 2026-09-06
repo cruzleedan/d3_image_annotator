@@ -356,13 +356,39 @@ void _paintHandles(
     at,
   ) {
     if (grip == AnnotationGrip.rotate) {
-      canvas.drawCircle(at, kHandleRadius, rotateFill);
-      canvas.drawCircle(at, kHandleRadius, edge);
+      // Larger than a resize dot, and carries an actual rotate glyph
+      // (not just a different fill colour) so it reads unambiguously as
+      // "this one rotates" at a glance, distinct from the four plain
+      // resize handles -- found necessary during on-device testing
+      // (WORK-0035/0037): a colour-only difference on a small dot was
+      // not enough to communicate a different function.
+      canvas.drawCircle(at, kRotationHandleRadius, rotateFill);
+      canvas.drawCircle(at, kRotationHandleRadius, edge);
+      _paintRotateGlyph(canvas, at);
     } else {
       canvas.drawCircle(at, kHandleRadius, fill);
       canvas.drawCircle(at, kHandleRadius, edge);
     }
   });
+}
+
+/// Draws a small rotate/refresh icon centred at [center], sized to fit
+/// inside a [kRotationHandleRadius] circle.
+void _paintRotateGlyph(Canvas canvas, Offset center) {
+  const icon = Icons.rotate_right;
+  final painter = TextPainter(
+    text: TextSpan(
+      text: String.fromCharCode(icon.codePoint),
+      style: TextStyle(
+        color: const Color(0xFFFFFFFF),
+        fontSize: kRotationHandleRadius * 1.3,
+        fontFamily: icon.fontFamily,
+        package: icon.fontPackage,
+      ),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+  painter.paint(canvas, center - Offset(painter.width / 2, painter.height / 2));
 }
 
 void _paintSelection(
