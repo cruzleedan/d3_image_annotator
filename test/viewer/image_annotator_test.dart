@@ -570,9 +570,11 @@ void main() {
           reason: 'a colour background never touches Image at all');
     });
 
-    for (final tool in AnnotationTool.values) {
-      testWidgets('every annotation type can be drawn on a colour '
-          'background ($tool)', (tester) async {
+    for (final tool in AnnotationTool.values.where(
+      (t) => t != AnnotationTool.text,
+    )) {
+      testWidgets('every drag-based annotation type can be drawn on a '
+          'colour background ($tool)', (tester) async {
         final c = await pumpBackground(
           tester,
           background: const AnnotationBackground.color(Colors.blue),
@@ -586,6 +588,27 @@ void main() {
         expect(c.annotations, hasLength(1));
       });
     }
+
+    testWidgets(
+      'text can be placed on a colour background (WORK-0034)',
+      (tester) async {
+        final c = await pumpBackground(
+          tester,
+          background: const AnnotationBackground.color(Colors.blue),
+          canvasSize: const Size(500, 1000),
+          tool: AnnotationTool.text,
+        );
+
+        await tester.tapAt(at(0.3, 0.3));
+        await tester.pump();
+        await tester.enterText(find.byType(TextField), 'hello');
+        await tester.testTextInput.receiveAction(TextInputAction.done);
+        await tester.pumpAndSettle();
+
+        expect(c.annotations, hasLength(1));
+        expect(c.annotations.single, isA<TextAnnotation>());
+      },
+    );
 
     testWidgets(
       'switching background image-to-colour keeps annotations unchanged '

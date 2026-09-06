@@ -13,7 +13,15 @@ import 'annotation_style.dart';
 /// outlive the app version that wrote them, and retrofitting versioning
 /// later means guessing at unversioned data already sitting in a
 /// database somewhere.
-const int kAnnotationSchemaVersion = 1;
+///
+/// Bumped to 2 for `TextAnnotation` (WORK-0034) -- a genuinely new
+/// annotation `type` value a version-1 reader has never seen, unlike
+/// WORK-0033's `rotation` field, which stayed backward-compatible as an
+/// optional key on existing types without needing a version bump at
+/// all. A document written by this build is refused by a build that
+/// only understands version 1, loudly, rather than silently dropping
+/// every text annotation it contains.
+const int kAnnotationSchemaVersion = 2;
 
 /// Thrown when a payload cannot be decoded.
 ///
@@ -191,6 +199,13 @@ Map<String, Object?> annotationToJson(Annotation annotation) {
       'type': 'freehand',
       'points': [for (final p in points) _pointToJson(p)],
     },
+    TextAnnotation(:final position, :final text, :final rotation) => {
+      ...base,
+      'type': 'text',
+      'position': _pointToJson(position),
+      'text': text,
+      if (rotation != 0.0) 'rotation': rotation,
+    },
   };
 }
 
@@ -246,6 +261,20 @@ Annotation annotationFromJson(Map<String, Object?> json) {
           for (final p in raw) _pointFromJson(_asMap(p, 'freehand point')),
         ],
       );
+    case 'text':
+      final text = json['text'];
+      if (text is! String) {
+        throw const AnnotationDecodeException(
+          'text annotation needs a string "text"',
+        );
+      }
+      return TextAnnotation(
+        id: id,
+        style: style,
+        position: _pointFromJson(_asMap(json['position'], 'position')),
+        text: text,
+        rotation: _rotationFromJson(json['rotation']),
+      );
     default:
       throw AnnotationDecodeException(
         'unknown annotation type "$type" -- written by a newer version? '
@@ -260,6 +289,15 @@ Map<String, Object?> _styleToJson(AnnotationStyle style) => {
   'color': style.color.toARGB32(),
   'strokeWidth': style.strokeWidth,
   'filled': style.filled,
+  // Omitted at their defaults/absent, the same convention rotation
+  // already established: a document written before text annotations
+  // existed decodes identically to one that explicitly wrote the
+  // default fontSize, and a missing backgroundColor key already means
+  // "no background" without needing a sentinel value.
+  if (style.fontSize != const AnnotationStyle().fontSize)
+    'fontSize': style.fontSize,
+  if (style.backgroundColor case final bg?)
+    'backgroundColor': bg.toARGB32(),
 };
 
 AnnotationStyle _styleFromJson(Map<String, Object?> json) {
@@ -270,10 +308,22 @@ AnnotationStyle _styleFromJson(Map<String, Object?> json) {
       'style needs an int "color" and numeric "strokeWidth"',
     );
   }
+  final fontSize = json['fontSize'];
+  if (fontSize != null && fontSize is! num) {
+    throw const AnnotationDecodeException('"fontSize" must be a number');
+  }
+  final backgroundColor = json['backgroundColor'];
+  if (backgroundColor != null && backgroundColor is! int) {
+    throw const AnnotationDecodeException('"backgroundColor" must be an int');
+  }
   return AnnotationStyle(
     color: Color(color),
     strokeWidth: strokeWidth.toDouble(),
     filled: json['filled'] == true,
+    fontSize: (fontSize as num?)?.toDouble() ?? const AnnotationStyle().fontSize,
+    backgroundColor: backgroundColor == null
+        ? null
+        : Color(backgroundColor as int),
   );
 }
 

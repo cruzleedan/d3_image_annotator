@@ -235,16 +235,116 @@ final class FreehandAnnotation extends Annotation {
   String toString() => 'FreehandAnnotation($id, ${points.length} points)';
 }
 
+/// A single line of text anchored at [position] (WORK-0034).
+///
+/// Single-line only for v1 -- [text] must not contain `\n`; the overlay
+/// text-entry surface enforces this at input time rather than leaving it
+/// as an undocumented assumption an unvalidated string could violate.
+final class TextAnnotation extends Annotation {
+  const TextAnnotation({
+    required super.id,
+    required super.style,
+    required this.position,
+    required this.text,
+    this.rotation = 0.0,
+  });
+
+  /// Top-left anchor, matching every other bounded type's corner
+  /// convention rather than a centre-anchored exception for this one
+  /// type.
+  final NormalizedPoint position;
+
+  final String text;
+
+  /// See [RectangleAnnotation.rotation] -- same convention, included
+  /// from v1 rather than deferred, so text is not a known inconsistency
+  /// against the four already-rotatable types (WORK-0034's decision).
+  final double rotation;
+
+  /// A coarse, approximate rect anchored at [position] -- **not** the
+  /// real on-screen box a rendered line of this length and [style]
+  /// .fontSize actually occupies.
+  ///
+  /// Every other type's `bounds` is knowable from stored geometry alone;
+  /// text's true rendered width needs a `TextPainter` layout pass
+  /// against a resolved pixel font size, which this zero-argument
+  /// getter has no way to obtain (it would need the image's shorter-side
+  /// pixel size, exactly what `contentRect`/`transform` supply at every
+  /// real call site). Rather than widen `Annotation.bounds`'s signature
+  /// for every type to accommodate this one, callers that need the
+  /// *exact* on-screen box (painting, precise hit-testing, handles,
+  /// floating controls) use `textBoundsInPixels` in
+  /// `annotation_handles.dart` instead. This getter exists only so
+  /// `TextAnnotation` satisfies the sealed base's contract uniformly --
+  /// callers that only need "roughly where is this, in normalized
+  /// space" (nothing in this package today) can use it directly.
+  ///
+  /// The estimate: `fontSize` tall, and `fontSize * 0.6 * text.length`
+  /// wide -- a rough average glyph aspect ratio, not a substitute for
+  /// real layout.
+  @override
+  NormalizedRect get bounds {
+    final width = (style.fontSize * 0.6 * text.length).clamp(0.0, 1.0 - position.x);
+    final height = style.fontSize.clamp(0.0, 1.0 - position.y);
+    return NormalizedRect(
+      left: position.x,
+      top: position.y,
+      right: position.x + width,
+      bottom: position.y + height,
+    );
+  }
+
+  @override
+  TextAnnotation copyWithStyle(AnnotationStyle style) => TextAnnotation(
+    id: id,
+    style: style,
+    position: position,
+    text: text,
+    rotation: rotation,
+  );
+
+  TextAnnotation copyWith({
+    NormalizedPoint? position,
+    String? text,
+    double? rotation,
+  }) => TextAnnotation(
+    id: id,
+    style: style,
+    position: position ?? this.position,
+    text: text ?? this.text,
+    rotation: rotation ?? this.rotation,
+  );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TextAnnotation &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          style == other.style &&
+          position == other.position &&
+          text == other.text &&
+          rotation == other.rotation;
+
+  @override
+  int get hashCode => Object.hash(id, style, position, text, rotation);
+
+  @override
+  String toString() => 'TextAnnotation($id, "$text" @ $position, '
+      'rotation: $rotation)';
+}
+
 /// [annotation]'s rotation (WORK-0033), or `0.0` for a type that has
 /// none.
 ///
-/// Only `RectangleAnnotation`/`CircleAnnotation` carry a `rotation`
-/// field; consolidated here rather than repeating this same `switch` at
-/// every site that needs to know whether a shape is rotated (the
-/// painter, hit-testing, and floating shape controls all do).
+/// `RectangleAnnotation`/`CircleAnnotation`/`TextAnnotation` carry a
+/// `rotation` field; consolidated here rather than repeating this same
+/// `switch` at every site that needs to know whether a shape is rotated
+/// (the painter, hit-testing, and floating shape controls all do).
 double rotationOf(Annotation annotation) => switch (annotation) {
   RectangleAnnotation(:final rotation) => rotation,
   CircleAnnotation(:final rotation) => rotation,
+  TextAnnotation(:final rotation) => rotation,
   ArrowAnnotation() || FreehandAnnotation() => 0.0,
 };
 
@@ -313,6 +413,14 @@ Annotation? translateAnnotation(Annotation annotation, double dx, double dy) {
           for (final p in points) NormalizedPoint(p.x + dx, p.y + dy),
         ],
       );
+
+    case TextAnnotation(:final position):
+      if (!inRange(position.x + dx) || !inRange(position.y + dy)) {
+        return null;
+      }
+      return annotation.copyWith(
+        position: NormalizedPoint(position.x + dx, position.y + dy),
+      );
   }
 }
 
@@ -341,6 +449,14 @@ Annotation duplicateAnnotation(Annotation annotation, String newId) {
       ArrowAnnotation(id: newId, style: style, start: start, end: end),
     FreehandAnnotation(:final style, :final points) =>
       FreehandAnnotation(id: newId, style: style, points: points),
+    TextAnnotation(:final style, :final position, :final text, :final rotation) =>
+      TextAnnotation(
+        id: newId,
+        style: style,
+        position: position,
+        text: text,
+        rotation: rotation,
+      ),
   };
   return translateAnnotation(withId, kDuplicateOffset, kDuplicateOffset) ??
       withId;

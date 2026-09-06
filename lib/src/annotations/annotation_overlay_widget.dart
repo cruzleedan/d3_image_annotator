@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../coordinates/coordinate_space.dart';
@@ -11,6 +13,7 @@ import 'annotation.dart';
 import 'annotation_controller.dart';
 import 'annotation_handles.dart';
 import 'annotation_painter.dart';
+import 'annotation_style.dart';
 import 'annotation_tool.dart';
 import 'hit_testing.dart';
 
@@ -107,6 +110,12 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
   /// Set when a drag grabbed a resize handle rather than the shape body.
   AnnotationGrip? _grip;
 
+  /// The text-entry overlay's state, or null when it is closed. A third
+  /// interaction lifecycle alongside "grows as you drag" and "select and
+  /// move" (WORK-0034) -- text has no drag phase at all, so it does not
+  /// reuse `_draft`/`_dragStart`.
+  _TextEditSession? _textEdit;
+
   int _idCounter = 0;
 
 
@@ -193,6 +202,17 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
       transform: widget.imageTransform,
     );
     if (hit != null) {
+      // Tapping an already-selected TextAnnotation again re-opens the
+      // text field pre-filled with its current content (WORK-0034),
+      // rather than starting a move drag the way every other type's
+      // second tap does -- decided explicitly so a typo can be
+      // corrected in place instead of delete-and-replace being the
+      // only option.
+      if (hit is TextAnnotation && widget.controller.selectedId == hit.id) {
+        setState(() => _textEdit = _TextEditSession(existing: hit));
+        return;
+      }
+
       widget.controller.select(hit.id);
       _movingId = hit.id;
       _movingOriginal = hit;
@@ -200,9 +220,16 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
       return;
     }
 
-    // Nothing under the finger: clear any existing selection and start
-    // drawing with the active tool, same as every tool always has.
+    // Nothing under the finger: clear any existing selection.
     widget.controller.select(null);
+
+    // Text has no drag phase (WORK-0034): a tap on empty space opens
+    // the overlay text field directly, rather than starting a growing
+    // draft the way every drag-based tool does below.
+    if (widget.tool == AnnotationTool.text) {
+      setState(() => _textEdit = _TextEditSession(position: point));
+      return;
+    }
 
     _dragStart = point;
     setState(() {
@@ -227,6 +254,10 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
           id: 'draft',
           style: widget.controller.style,
           points: [point],
+        ),
+        AnnotationTool.text => throw StateError(
+          'unreachable -- text is handled above, before any draft is '
+          'created',
         ),
       };
     });
@@ -259,6 +290,10 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
         FreehandAnnotation(:final points) => _isFarEnough(points.last, point)
             ? draft.copyWith(points: [...points, point])
             : draft,
+        // Unreachable: _draft is never a TextAnnotation -- text has no
+        // drag phase at all (WORK-0034), so _onPanStart never assigns
+        // one to _draft in the first place.
+        TextAnnotation() => draft,
       };
     });
   }
@@ -357,6 +392,42 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     }
   }
 
+  /// Commits [text] from the open text-entry session, or discards it if
+  /// empty (WORK-0034) -- an empty submit must not create or leave
+  /// behind an invisible annotation with nothing to show or hit-test.
+  void _commitTextEdit(String text) {
+    final session = _textEdit;
+    if (session == null) return;
+    setState(() => _textEdit = null);
+
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+
+    final existing = session.existing;
+    if (existing != null) {
+      // Editing: preserve position/style/rotation, replace only the
+      // text, as one undo step via the existing controller.update --
+      // the same mechanism every other restyle already uses.
+      widget.controller.update(existing.id, existing.copyWith(text: trimmed));
+      return;
+    }
+
+    final position = session.position;
+    if (position == null) return;
+    final annotation = TextAnnotation(
+      id: _nextId(),
+      style: widget.controller.style,
+      position: position,
+      text: trimmed,
+    );
+    widget.controller.add(annotation);
+    widget.controller.select(annotation.id);
+  }
+
+  void _cancelTextEdit() {
+    setState(() => _textEdit = null);
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -381,7 +452,10 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
             // onScale* reports pointerCount, so a single detector can
             // route one finger to drawing and two to zoom without any
             // arena contention at all.
-            final selected = draft == null ? widget.controller.selected : null;
+            final textEdit = _textEdit;
+            final selected = draft == null && textEdit == null
+                ? widget.controller.selected
+                : null;
 
             return Stack(
               fit: StackFit.expand,
@@ -416,7 +490,14 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
                       size: widgetSize,
                       painter: AnnotationPainter(
                         annotations: [
-                          ...widget.controller.annotations,
+                          // The text annotation currently open for
+                          // re-editing is hidden here -- its live
+                          // TextField overlay is the visible
+                          // representation while editing, so painting
+                          // both would show the old text doubled under
+                          // the field editing it.
+                          for (final a in widget.controller.annotations)
+                            if (a.id != textEdit?.existing?.id) a,
                           ?draft,
                         ],
                         contentRect: contentRect,
@@ -443,6 +524,23 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
                       transform: widget.imageTransform,
                       onDelete: _deleteSelected,
                       onDuplicate: _duplicateSelected,
+                    ),
+                  ),
+                // The text-entry overlay is the last (topmost) child for
+                // the same reason the floating controls are: it is a
+                // sibling of the drawing GestureDetector, not nested
+                // inside it, so the TextField's own taps/keyboard focus
+                // never enter that pan/scale gesture arena at all.
+                if (textEdit != null)
+                  _MaybeTransformed(
+                    transform: widget.transform,
+                    child: _TextEntryOverlay(
+                      session: textEdit,
+                      contentRect: contentRect,
+                      transform: widget.imageTransform,
+                      style: widget.controller.style,
+                      onCommit: _commitTextEdit,
+                      onCancel: _cancelTextEdit,
                     ),
                   ),
               ],
@@ -476,6 +574,10 @@ bool _isDegenerate(Annotation annotation) {
       (start.x - end.x).abs() < epsilon && (start.y - end.y).abs() < epsilon,
     // A single-point freehand is a deliberate dot, not a mis-drag.
     FreehandAnnotation() => false,
+    // Text never reaches this function -- it has no drag-draft phase
+    // (see _commitTextEdit's own empty-string check instead), but the
+    // case is needed to keep this switch exhaustive.
+    TextAnnotation() => false,
   };
 }
 
@@ -497,6 +599,17 @@ Annotation _withId(Annotation annotation, String id) {
       ArrowAnnotation(id: id, style: style, start: start, end: end),
     FreehandAnnotation(:final style, :final points) =>
       FreehandAnnotation(id: id, style: style, points: points),
+    // Text never reaches this function -- _commitTextEdit builds a
+    // TextAnnotation with its final id directly, since it has no
+    // drag-draft phase that would need a placeholder id replaced later.
+    TextAnnotation(:final style, :final position, :final text, :final rotation) =>
+      TextAnnotation(
+        id: id,
+        style: style,
+        position: position,
+        text: text,
+        rotation: rotation,
+      ),
   };
 }
 
@@ -577,6 +690,144 @@ class _FloatingShapeControls extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// What the text-entry overlay is doing: placing a brand-new
+/// [TextAnnotation] at [position], or re-editing [existing]'s content in
+/// place (WORK-0034). Exactly one of the two is set.
+@immutable
+class _TextEditSession {
+  const _TextEditSession({this.position, this.existing})
+    : assert(
+        (position == null) != (existing == null),
+        'exactly one of position or existing must be given',
+      );
+
+  final NormalizedPoint? position;
+  final TextAnnotation? existing;
+}
+
+/// A single-line [TextField] positioned at a [_TextEditSession]'s
+/// anchor point, for placing or re-editing a [TextAnnotation]
+/// (WORK-0034).
+///
+/// Positioned in pixel space like the floating shape controls -- a
+/// sibling of the drawing `GestureDetector`, not nested inside it, so
+/// this field's own taps and the system keyboard's focus never enter
+/// that pan/scale gesture arena.
+class _TextEntryOverlay extends StatefulWidget {
+  const _TextEntryOverlay({
+    required this.session,
+    required this.contentRect,
+    required this.transform,
+    required this.style,
+    required this.onCommit,
+    required this.onCancel,
+  });
+
+  final _TextEditSession session;
+  final Rect contentRect;
+  final ImageTransform transform;
+
+  /// The style a *new* placement would use -- irrelevant when
+  /// [_TextEditSession.existing] is set, since editing keeps that
+  /// annotation's own style untouched.
+  final AnnotationStyle style;
+
+  final ValueChanged<String> onCommit;
+  final VoidCallback onCancel;
+
+  @override
+  State<_TextEntryOverlay> createState() => _TextEntryOverlayState();
+}
+
+class _TextEntryOverlayState extends State<_TextEntryOverlay> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.session.existing?.text ?? '',
+  );
+  late final FocusNode _focusNode = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    // Opens already focused -- the whole point of tap-to-place is typing
+    // immediately, not a second tap to reach the keyboard.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final existing = widget.session.existing;
+    final style = existing?.style ?? widget.style;
+    final fontSizePixels = style.resolveFontSize(
+      shorterSidePixels(widget.contentRect, widget.transform),
+    );
+
+    final anchor = existing != null
+        ? textBoundsInPixels(existing, widget.contentRect, widget.transform)
+              .topLeft
+        : mapPointToPixels(
+            widget.session.position!,
+            widget.contentRect,
+            widget.transform,
+          );
+
+    // Own Stack, the same pattern _FloatingShapeControls uses: a bare
+    // Positioned needs a Stack as its direct ancestor, and this widget
+    // sits under _MaybeTransformed's Transform, not a Stack, in the
+    // overlay's own tree.
+    return Stack(
+      children: [
+        Positioned(
+          left: anchor.dx,
+          top: anchor.dy,
+          child: Material(
+            type: MaterialType.transparency,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minWidth: math.max(fontSizePixels * 4, 80),
+              ),
+              child: IntrinsicWidth(
+                child: TextField(
+                  controller: _controller,
+                  focusNode: _focusNode,
+                  autofocus: true,
+                  maxLines: 1,
+                  // Single-line for v1 (WORK-0034): a hardware/software
+                  // return key commits rather than inserting a newline
+                  // the rest of this package's rendering has no
+                  // support for.
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: widget.onCommit,
+                  style: TextStyle(
+                    color: style.color,
+                    fontSize: fontSizePixels,
+                  ),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    filled: style.backgroundColor != null,
+                    fillColor: style.backgroundColor,
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                  onTapOutside: (_) => widget.onCommit(_controller.text),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

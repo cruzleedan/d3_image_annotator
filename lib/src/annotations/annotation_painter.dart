@@ -41,26 +41,10 @@ void paintAnnotations(
     canvas.clipRect(contentRect);
   }
 
-  // Stroke width is a fraction of the *whole image* as currently
-  // displayed, not of the visible content rect.
-  //
-  // Those differ under crop, and using the rect is wrong: cropping
-  // shrinks the result, which `contain` then scales back up to fill the
-  // viewport. The rect's shorter side barely changes, so the stroke
-  // stays the same pixel width while the content beneath it is
-  // magnified -- the mark comes out visibly thinner relative to the
-  // feature it marks. Dividing by the crop's extent undoes that
-  // magnification, so a mark keeps its weight relative to the picture,
-  // which is the rule this package documents: annotations scale *with*
-  // the image.
-  final crop = transform.effectiveCrop;
-  final fullWidth = crop.width == 0
-      ? contentRect.width
-      : contentRect.width / crop.width;
-  final fullHeight = crop.height == 0
-      ? contentRect.height
-      : contentRect.height / crop.height;
-  final shorterSide = math.min(fullWidth, fullHeight);
+  // Stroke width (and font size) is a fraction of the *whole image* as
+  // currently displayed, not of the visible content rect -- see
+  // shorterSidePixels for why.
+  final shorterSide = shorterSidePixels(contentRect, transform);
 
   for (final annotation in annotations) {
     final paint = Paint()
@@ -105,12 +89,22 @@ void paintAnnotations(
           ],
           paint,
         );
+      case TextAnnotation(:final rotation):
+        _drawRotated(
+          canvas,
+          textBoundsInPixels(annotation, contentRect, transform),
+          rotation,
+          (r) => _paintText(canvas, annotation, r, shorterSide),
+        );
     }
 
     if (annotation.id == selectedId) {
+      final selectionBounds = annotation is TextAnnotation
+          ? textBoundsInPixels(annotation, contentRect, transform)
+          : mapRectToPixels(annotation.bounds, contentRect, transform);
       _paintSelection(
         canvas,
-        mapRectToPixels(annotation.bounds, contentRect, transform),
+        selectionBounds,
         rotationOf(annotation),
         paint,
       );
@@ -228,6 +222,47 @@ void _paintFreehand(Canvas canvas, List<Offset> points, Paint paint) {
     path.lineTo(points[i].dx, points[i].dy);
   }
   canvas.drawPath(path, strokePaint);
+}
+
+/// Draws [text] into [bounds] -- already the exact box a `TextPainter`
+/// layout pass measured it to (via `textBoundsInPixels`), so this only
+/// paints, it does not lay out a second time with different metrics
+/// that could drift from what [bounds] itself was measured against.
+///
+/// **Rasterized here, on the root isolate, before any compositing
+/// finishes** (WORK-0034's rendering decision): `PictureRecorder` is
+/// root-isolate-only regardless of annotation type (documented in
+/// `render_annotated_image.dart`), which is exactly where the root
+/// isolate's already-loaded fonts resolve normally. By the time
+/// `renderCompositedImage`'s background-isolate PNG encode path
+/// (WORK-0030) ever sees a pixel buffer, this text is already baked
+/// into it as ordinary RGBA -- the encode worker needs no font access
+/// at all, for text or any other annotation type, because painting
+/// (this function) always happens first, unconditionally, on the
+/// isolate where fonts already work.
+void _paintText(
+  Canvas canvas,
+  TextAnnotation text,
+  Rect bounds,
+  double shorterSidePixels,
+) {
+  if (text.style.backgroundColor case final bg?) {
+    canvas.drawRect(bounds, Paint()..color = bg);
+  }
+
+  // The exact same font-size resolution `textBoundsInPixels` used to
+  // measure [bounds] -- painting at any other size here would drift
+  // from the box the rest of the pipeline (hit-testing, handles,
+  // selection outline) already agreed this text occupies.
+  final fontSizePixels = text.style.resolveFontSize(shorterSidePixels);
+  final painter = TextPainter(
+    text: TextSpan(
+      text: text.text,
+      style: TextStyle(color: text.style.color, fontSize: fontSizePixels),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+  painter.paint(canvas, bounds.topLeft);
 }
 
 /// Draws a grab handle at each of the annotation's grips.

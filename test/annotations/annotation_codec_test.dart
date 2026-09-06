@@ -40,6 +40,12 @@ void main() {
         NormalizedPoint(1, 1),
       ],
     ),
+    'text': const TextAnnotation(
+      id: 't1',
+      style: style,
+      position: NormalizedPoint(0.3, 0.4),
+      text: 'hello world',
+    ),
   };
 
   group('round trip', () {
@@ -207,6 +213,140 @@ void main() {
       expect(restyled.rotation, 1.1,
           reason: 'restyling a rotated shape must not silently reset its '
               'rotation to zero');
+    });
+  });
+
+  group('text (WORK-0034)', () {
+    test('the schema version was bumped for a genuinely new type', () {
+      // Unlike WORK-0033's rotation field (an optional key on an
+      // existing type), "text" is a type value a version-1 reader has
+      // never seen at all -- this is what actually needs the bump,
+      // recorded as a guarantee rather than a number nobody checks.
+      expect(kAnnotationSchemaVersion, greaterThanOrEqualTo(2));
+    });
+
+    test('a pre-text document (no text annotations) still decodes at '
+        'the current schema version', () {
+      // A document written before TextAnnotation existed contains only
+      // the four original types and the schema version *at the time it
+      // was written* -- decoding it with today's build (which
+      // understands version 2) must not require it to somehow already
+      // know about a type it never used.
+      final json = <String, Object?>{
+        'schemaVersion': 1,
+        'annotations': [annotationToJson(samples['rectangle']!)],
+      };
+
+      final restored = AnnotationDocument.fromJson(json);
+
+      expect(restored.annotations, hasLength(1));
+      expect(restored.annotations.single, samples['rectangle']);
+    });
+
+    test('a rotated text annotation survives encode/decode unchanged', () {
+      const rotated = TextAnnotation(
+        id: 't1',
+        style: style,
+        position: NormalizedPoint(0.2, 0.3),
+        text: 'tilted',
+        rotation: 0.5,
+      );
+
+      final restored = annotationFromJson(annotationToJson(rotated));
+
+      expect(restored, rotated);
+      expect((restored as TextAnnotation).rotation, rotated.rotation);
+    });
+
+    test('a zero rotation is not written to JSON, same as every other '
+        'rotatable type', () {
+      final json = annotationToJson(samples['text']!);
+      expect(json.containsKey('rotation'), isFalse);
+    });
+
+    test('a text annotation with no "rotation" key decodes as zero', () {
+      final json = <String, Object?>{
+        'type': 'text',
+        'id': 't1',
+        'style': {'color': 0xFFFF0000, 'strokeWidth': 0.01, 'filled': false},
+        'position': {'x': 0.1, 'y': 0.1},
+        'text': 'hi',
+      };
+
+      final restored = annotationFromJson(json) as TextAnnotation;
+
+      expect(restored.rotation, 0.0);
+    });
+
+    test('a missing "text" throws rather than defaulting to empty', () {
+      expect(
+        () => annotationFromJson({
+          'type': 'text',
+          'id': 't1',
+          'style': {'color': 0xFFFF0000, 'strokeWidth': 0.01, 'filled': false},
+          'position': {'x': 0.1, 'y': 0.1},
+        }),
+        throwsA(isA<AnnotationDecodeException>()),
+      );
+    });
+
+    test('fontSize round-trips', () {
+      const styled = TextAnnotation(
+        id: 't1',
+        style: AnnotationStyle(fontSize: 0.08),
+        position: NormalizedPoint(0.1, 0.1),
+        text: 'big',
+      );
+
+      final restored = annotationFromJson(annotationToJson(styled));
+
+      expect((restored as TextAnnotation).style.fontSize, 0.08);
+    });
+
+    test('backgroundColor round-trips when set', () {
+      const styled = TextAnnotation(
+        id: 't1',
+        style: AnnotationStyle(backgroundColor: Color(0xFF000000)),
+        position: NormalizedPoint(0.1, 0.1),
+        text: 'boxed',
+      );
+
+      final restored = annotationFromJson(annotationToJson(styled));
+
+      expect(
+        (restored as TextAnnotation).style.backgroundColor?.toARGB32(),
+        0xFF000000,
+      );
+    });
+
+    test('no backgroundColor key means no background, not black', () {
+      // A document written before backgroundColor existed (or a style
+      // that never set one) must decode as null, not accidentally
+      // acquire a visible background it never had.
+      final json = <String, Object?>{
+        'type': 'text',
+        'id': 't1',
+        'style': {'color': 0xFFFF0000, 'strokeWidth': 0.01, 'filled': false},
+        'position': {'x': 0.1, 'y': 0.1},
+        'text': 'plain',
+      };
+
+      final restored = annotationFromJson(json) as TextAnnotation;
+
+      expect(restored.style.backgroundColor, isNull);
+    });
+
+    test('a document containing text bumps past a version-1-only reader '
+        'as expected', () {
+      // The other half of the schema-bump guarantee: a build that only
+      // understands version 1 must refuse a document containing text,
+      // rather than silently dropping the text annotations it cannot
+      // parse.
+      final document = AnnotationDocument(
+        annotations: [samples['text']!],
+      );
+      final json = document.toJson();
+      expect(json['schemaVersion'], greaterThan(1));
     });
   });
 
