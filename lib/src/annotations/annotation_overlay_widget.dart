@@ -158,39 +158,48 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
   void _onPanStart(Offset localRaw, Rect contentRect) {
     final point = _toOriginalImagePoint(localRaw, contentRect);
 
-    if (widget.tool == AnnotationTool.select) {
-      // Handles first. A handle sits on the shape's edge, so without
-      // this priority every corner drag would hit the shape and move it
-      // instead of resizing.
-      final selected = widget.controller.selected;
-      if (selected != null) {
-        final grip = gripAt(
-          selected,
-          _toImageSpace(localRaw),
-          contentRect,
-          widget.imageTransform,
-        );
-        if (grip != null) {
-          _grip = grip;
-          _movingId = selected.id;
-          _movingOriginal = selected;
-          return;
-        }
-      }
+    // Selection wins the tap, regardless of which tool is active
+    // (WORK-0032). A shape under the finger is always selected/grabbed
+    // first; only a gesture that starts on empty space falls through to
+    // the active tool's draw behaviour below. This is what lets a user
+    // delete, move, or restyle an existing mark without switching tools
+    // first -- there is no dedicated select mode to switch into.
 
-      final hit = hitTestAnnotations(
-        widget.controller.annotations,
-        point,
+    // Handles first. A handle sits on the shape's edge, so without this
+    // priority every corner drag would hit the shape and move it
+    // instead of resizing.
+    final selected = widget.controller.selected;
+    if (selected != null) {
+      final grip = gripAt(
+        selected,
+        _toImageSpace(localRaw),
         contentRect,
+        widget.imageTransform,
       );
-      widget.controller.select(hit?.id);
-      if (hit != null) {
-        _movingId = hit.id;
-        _movingOriginal = hit;
-        _moveAnchor = point;
+      if (grip != null) {
+        _grip = grip;
+        _movingId = selected.id;
+        _movingOriginal = selected;
+        return;
       }
+    }
+
+    final hit = hitTestAnnotations(
+      widget.controller.annotations,
+      point,
+      contentRect,
+    );
+    if (hit != null) {
+      widget.controller.select(hit.id);
+      _movingId = hit.id;
+      _movingOriginal = hit;
+      _moveAnchor = point;
       return;
     }
+
+    // Nothing under the finger: clear any existing selection and start
+    // drawing with the active tool, same as every tool always has.
+    widget.controller.select(null);
 
     _dragStart = point;
     setState(() {
@@ -216,7 +225,6 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
           style: widget.controller.style,
           points: [point],
         ),
-        AnnotationTool.select => throw StateError('handled above'),
       };
     });
   }
@@ -224,7 +232,10 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
   void _onPanUpdate(Offset localRaw, Rect contentRect) {
     final point = _toOriginalImagePoint(localRaw, contentRect);
 
-    if (widget.tool == AnnotationTool.select) {
+    // A move/resize in progress takes priority over drawing, mirroring
+    // _onPanStart's priority: if this gesture grabbed a shape or a
+    // handle, it continues doing that regardless of the active tool.
+    if (_movingId != null) {
       _dragSelection(point);
       return;
     }
@@ -284,7 +295,7 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
   }
 
   void _onPanEnd() {
-    if (widget.tool == AnnotationTool.select) {
+    if (_movingId != null) {
       _movingId = null;
       _movingOriginal = null;
       _moveAnchor = null;

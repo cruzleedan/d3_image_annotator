@@ -168,8 +168,9 @@ void main() {
     });
   });
 
-  group('select tool', () {
-    testWidgets('tapping an annotation selects it', (tester) async {
+  group('tap-to-select from any tool (WORK-0032)', () {
+    testWidgets('tapping an annotation selects it even with a drawing tool active',
+        (tester) async {
       final controller = AnnotationController()
         ..add(
           RectangleAnnotation(
@@ -183,9 +184,12 @@ void main() {
             ),
           ),
         );
+      // Deliberately not the tool that drew the shape -- selection must
+      // win the tap regardless of which drawing tool happens to be
+      // active, which is the whole point of WORK-0032.
       await pumpOverlay(
         tester,
-        tool: AnnotationTool.select,
+        tool: AnnotationTool.circle,
         controller: controller,
       );
 
@@ -213,7 +217,7 @@ void main() {
       controller.select('target');
       await pumpOverlay(
         tester,
-        tool: AnnotationTool.select,
+        tool: AnnotationTool.freehand,
         controller: controller,
       );
 
@@ -239,7 +243,7 @@ void main() {
         );
       await pumpOverlay(
         tester,
-        tool: AnnotationTool.select,
+        tool: AnnotationTool.circle,
         controller: controller,
       );
 
@@ -272,7 +276,7 @@ void main() {
         );
       await pumpOverlay(
         tester,
-        tool: AnnotationTool.select,
+        tool: AnnotationTool.arrow,
         controller: controller,
       );
 
@@ -284,6 +288,58 @@ void main() {
       expect(rect.width, closeTo(original.width, 1e-9),
           reason: 'the shape must not be squashed by an out-of-range move');
       expect(rect.right, lessThanOrEqualTo(1));
+    });
+
+    testWidgets(
+        'a drag starting on empty space still draws, even crossing an existing shape',
+        (tester) async {
+      // The other half of "selection wins the tap": a gesture that does
+      // *not* start on a shape must still draw normally, including when
+      // the drag path later crosses over an existing annotation -- only
+      // where a gesture *starts* decides selection vs. drawing.
+      final controller = AnnotationController()
+        ..add(
+          RectangleAnnotation(
+            id: 'existing',
+            style: const AnnotationStyle(),
+            rect: NormalizedRect(left: 0.4, top: 0.4, right: 0.6, bottom: 0.6),
+          ),
+        );
+      await pumpOverlay(
+        tester,
+        tool: AnnotationTool.rectangle,
+        controller: controller,
+      );
+
+      // Starts well outside 'existing', ends well inside it.
+      await tester.dragFrom(at(0.05, 0.05), at(0.5, 0.5) - at(0.05, 0.05));
+      await tester.pumpAndSettle();
+
+      expect(controller.annotations, hasLength(2),
+          reason: 'a new rectangle must have been added alongside the '
+              'existing one, not merely selected/moved it');
+      expect(controller.selectedId, isNull,
+          reason: 'drawing a new shape does not select an existing one');
+    });
+
+    testWidgets('with nothing selected, drawing behaves exactly as before',
+        (tester) async {
+      // Regression guard: introducing the selection hit-test ahead of
+      // drawing must not change plain drawing when there is nothing to
+      // select in the first place.
+      final controller = await pumpOverlay(
+        tester,
+        tool: AnnotationTool.rectangle,
+      );
+
+      await tester.dragFrom(at(0.2, 0.2), at(0.6, 0.6) - at(0.2, 0.2));
+      await tester.pumpAndSettle();
+
+      final rect = (controller.annotations.single as RectangleAnnotation).rect;
+      expect(rect.left, closeTo(0.2, 0.02));
+      expect(rect.top, closeTo(0.2, 0.02));
+      expect(rect.right, closeTo(0.6, 0.02));
+      expect(rect.bottom, closeTo(0.6, 0.02));
     });
   });
 
@@ -369,7 +425,7 @@ void main() {
       controller.select('target');
       await pumpOverlay(
         tester,
-        tool: AnnotationTool.select,
+        tool: AnnotationTool.freehand,
         controller: controller,
       );
 
@@ -391,7 +447,7 @@ void main() {
       controller.select('target');
       await pumpOverlay(
         tester,
-        tool: AnnotationTool.select,
+        tool: AnnotationTool.circle,
         controller: controller,
       );
 
@@ -418,7 +474,7 @@ void main() {
       final controller = AnnotationController()..add(target());
       await pumpOverlay(
         tester,
-        tool: AnnotationTool.select,
+        tool: AnnotationTool.arrow,
         controller: controller,
       );
 
@@ -442,7 +498,7 @@ void main() {
       controller.select('target');
       await pumpOverlay(
         tester,
-        tool: AnnotationTool.select,
+        tool: AnnotationTool.freehand,
         controller: controller,
       );
       final before =
@@ -467,7 +523,7 @@ void main() {
       controller.select('target');
       await pumpOverlay(
         tester,
-        tool: AnnotationTool.select,
+        tool: AnnotationTool.circle,
         controller: controller,
       );
 

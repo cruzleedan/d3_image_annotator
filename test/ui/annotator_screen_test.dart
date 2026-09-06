@@ -53,7 +53,10 @@ void main() {
       expect(find.byIcon(Icons.close), findsOneWidget);
       expect(find.byIcon(Icons.undo), findsOneWidget);
       expect(find.byIcon(Icons.redo), findsOneWidget);
-      expect(find.text('Select'), findsOneWidget);
+      // No 'Select' tool (WORK-0032): tapping any existing annotation
+      // selects it regardless of which drawing tool is active, so there
+      // is no dedicated mode to switch into.
+      expect(find.text('Select'), findsNothing);
       expect(find.text('Draw'), findsWidgets);
       expect(find.text('Adjust'), findsOneWidget);
     });
@@ -226,10 +229,13 @@ void main() {
     testWidgets('the tool bar carries one too', (tester) async {
       await pumpScreen(tester);
 
+      // 'Box' (rectangle) anchors the search -- any tool label works
+      // equally, since D3ToolBar wraps every button in one shared Row,
+      // but 'Select' no longer exists as a tool (WORK-0032).
       final surfaces = tester
           .widgetList<ColoredBox>(
             find.ancestor(
-              of: find.text('Select'),
+              of: find.text('Box'),
               matching: find.byType(ColoredBox),
             ),
           )
