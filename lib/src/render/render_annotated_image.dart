@@ -50,12 +50,24 @@ import 'render_options.dart';
 /// expressed as an [ImageTransform] — which is the reversible
 /// representation this package is built around anyway.
 ///
-/// **Runs on the root isolate.** `PictureRecorder` refuses to run
-/// anywhere else ("UI actions are only available on root isolate",
-/// flutter/flutter#92575), so this cannot be moved to a background
-/// isolate however much one might want to.
-/// [RenderOptions.maxDimension] is bounded by default to keep the work
-/// small enough not to drop frames.
+/// **Runs on the root isolate, and blocks it.** `PictureRecorder`
+/// refuses to run anywhere else ("UI actions are only available on root
+/// isolate", flutter/flutter#92575), so this cannot be moved to a
+/// background isolate however much one might want to.
+///
+/// Measured on a Pixel 10 with a 12MP source (WORK-0027):
+///
+/// | | full resolution | bounded default |
+/// |---|---|---|
+/// | elapsed | ~695 ms | ~223 ms |
+/// | peak decoded RGBA | 91.6 MB | 57.2 MB |
+///
+/// A full-resolution render therefore freezes the UI for roughly 640 ms
+/// — about 40 dropped frames. **Show a progress indicator**, and prefer
+/// the bounded default unless the original resolution is genuinely
+/// needed. Rendering several images for one report multiplies this:
+/// ten at full resolution is close to seven seconds. WORK-0030 tracks
+/// making that case better.
 Future<Uint8List> renderAnnotatedImage({
   required Uint8List imageBytes,
   required List<Annotation> annotations,
