@@ -174,11 +174,12 @@ class _AnnotatorDemoState extends State<_AnnotatorDemo> {
 
     // The whole editor, chrome included. The package owns the toolbars,
     // history controls and close affordance, so a consuming app supplies
-    // the image and decides what to do with the result -- rather than
-    // reassembling a toolbar and re-deriving which controls belong where.
+    // the background and decides what to do with the result -- rather
+    // than reassembling a toolbar and re-deriving which controls belong
+    // where.
     return D3AnnotatorScreen(
-      image: MemoryImage(bytes),
-      imageSize: _imageSize,
+      background: AnnotationBackground.image(MemoryImage(bytes)),
+      canvasSize: _imageSize,
       controller: _controller,
       onClose: () => ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Closed without saving')),

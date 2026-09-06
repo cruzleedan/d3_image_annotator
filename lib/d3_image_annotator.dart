@@ -9,7 +9,8 @@
 ///
 /// Two layers:
 ///
-/// - `D3ImageAnnotator` — a ready-made viewer: any `ImageProvider`,
+/// - `D3ImageAnnotator` — a ready-made viewer: any `AnnotationBackground`
+///   (a real image, or a plain colour fill for a blank canvas),
 ///   pinch-zoom and pan, one finger draws.
 /// - `AnnotationOverlay` plus `AnnotationController` and the shape
 ///   model — compose your own.
@@ -53,5 +54,6 @@ export 'src/render/render_annotated_images.dart';
 export 'src/render/render_options.dart';
 
 // Viewer
+export 'src/viewer/annotation_background.dart';
 export 'src/viewer/crop_overlay.dart';
 export 'src/viewer/image_annotator.dart';

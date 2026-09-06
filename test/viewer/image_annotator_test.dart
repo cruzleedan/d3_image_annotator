@@ -56,8 +56,8 @@ void main() {
             width: viewport.width,
             height: viewport.height,
             child: D3ImageAnnotator(
-              image: MemoryImage(_pngBytes),
-              imageSize: imageSize,
+              background: AnnotationBackground.image(MemoryImage(_pngBytes)),
+              canvasSize: imageSize,
               controller: c,
               tool: tool,
               enableZoom: enableZoom,
@@ -505,6 +505,218 @@ void main() {
       // Comfortably outside the ~20dp Android reserves each side.
       expect(rect.left, greaterThanOrEqualTo(20));
       expect(viewport.width - rect.right, greaterThanOrEqualTo(20));
+    });
+  });
+
+  group('blank-canvas mode (WORK-0036)', () {
+    Future<AnnotationController> pumpBackground(
+      WidgetTester tester, {
+      required AnnotationBackground background,
+      required Size canvasSize,
+      AnnotationController? controller,
+      Size? sourceImageSize,
+      ValueChanged<AnnotationBinding>? onBindingChanged,
+      AnnotationTool tool = AnnotationTool.rectangle,
+    }) async {
+      tester.view.physicalSize = viewport;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final AnnotationController c;
+      if (controller != null) {
+        c = controller;
+      } else {
+        c = AnnotationController();
+        addTearDown(c.dispose);
+      }
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Center(
+            child: SizedBox(
+              width: viewport.width,
+              height: viewport.height,
+              child: D3ImageAnnotator(
+                background: background,
+                canvasSize: canvasSize,
+                controller: c,
+                sourceImageSize: sourceImageSize,
+                onBindingChanged: onBindingChanged,
+                tool: tool,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      return c;
+    }
+
+    testWidgets('a colour background draws and accepts annotations', (
+      tester,
+    ) async {
+      const canvasSize = Size(500, 1000);
+      final c = await pumpBackground(
+        tester,
+        background: const AnnotationBackground.color(Colors.blue),
+        canvasSize: canvasSize,
+      );
+
+      await tester.dragFrom(at(0.2, 0.2), at(0.6, 0.7) - at(0.2, 0.2));
+      await tester.pumpAndSettle();
+
+      expect(c.annotations, hasLength(1));
+      expect(find.byType(Image), findsNothing,
+          reason: 'a colour background never touches Image at all');
+    });
+
+    for (final tool in AnnotationTool.values) {
+      testWidgets('every annotation type can be drawn on a colour '
+          'background ($tool)', (tester) async {
+        final c = await pumpBackground(
+          tester,
+          background: const AnnotationBackground.color(Colors.blue),
+          canvasSize: const Size(500, 1000),
+          tool: tool,
+        );
+
+        await tester.dragFrom(at(0.2, 0.2), at(0.6, 0.7) - at(0.2, 0.2));
+        await tester.pumpAndSettle();
+
+        expect(c.annotations, hasLength(1));
+      });
+    }
+
+    testWidgets(
+      'switching background image-to-colour keeps annotations unchanged '
+      'in normalized space',
+      (tester) async {
+        final c = AnnotationController();
+        addTearDown(c.dispose);
+        const canvasSize = Size(500, 1000);
+
+        await pumpBackground(
+          tester,
+          background: AnnotationBackground.image(MemoryImage(_pngBytes)),
+          canvasSize: canvasSize,
+          controller: c,
+        );
+        await tester.dragFrom(at(0.2, 0.2), at(0.6, 0.7) - at(0.2, 0.2));
+        await tester.pumpAndSettle();
+
+        final before = c.annotations.single;
+
+        await pumpBackground(
+          tester,
+          background: const AnnotationBackground.color(Colors.green),
+          canvasSize: canvasSize,
+          controller: c,
+        );
+        await tester.pump();
+
+        expect(c.annotations.single, before,
+            reason: 'a background switch must not touch stored geometry');
+      },
+    );
+
+    testWidgets(
+      'switching background colour-to-a-differently-sized-image keeps '
+      'annotations unchanged in normalized space',
+      (tester) async {
+        final c = AnnotationController();
+        addTearDown(c.dispose);
+
+        await pumpBackground(
+          tester,
+          background: const AnnotationBackground.color(Colors.blue),
+          canvasSize: const Size(500, 1000),
+          controller: c,
+        );
+        await tester.dragFrom(at(0.2, 0.2), at(0.6, 0.7) - at(0.2, 0.2));
+        await tester.pumpAndSettle();
+
+        final before = c.annotations.single;
+
+        await pumpBackground(
+          tester,
+          background: AnnotationBackground.image(MemoryImage(_pngBytes)),
+          canvasSize: const Size(300, 400),
+          controller: c,
+        );
+        await tester.pump();
+
+        expect(c.annotations.single, before,
+            reason: 'annotations live in normalized space, independent '
+                'of canvas size');
+      },
+    );
+
+    testWidgets(
+      'a background switch to a matching size reports AnnotationBinding.ok',
+      (tester) async {
+        AnnotationBinding? reported;
+        await pumpBackground(
+          tester,
+          background: AnnotationBackground.image(MemoryImage(_pngBytes)),
+          canvasSize: const Size(500, 1000),
+          sourceImageSize: const Size(500, 1000),
+          onBindingChanged: (b) => reported = b,
+        );
+
+        expect(reported, AnnotationBinding.ok);
+      },
+    );
+
+    testWidgets(
+      'a live background switch to a mismatched size reaches '
+      'AnnotationBinding.sizeMismatch -- not only document reload',
+      (tester) async {
+        final c = AnnotationController();
+        addTearDown(c.dispose);
+        AnnotationBinding? reported;
+
+        await pumpBackground(
+          tester,
+          background: AnnotationBackground.image(MemoryImage(_pngBytes)),
+          canvasSize: const Size(500, 1000),
+          controller: c,
+          sourceImageSize: const Size(500, 1000),
+          onBindingChanged: (b) => reported = b,
+        );
+        expect(reported, AnnotationBinding.ok);
+
+        // Switch to a colour background sized differently from the
+        // recorded hint -- the same "do these annotations still make
+        // sense against this size" question classifyBinding already
+        // answers for a document reload, reached here from a live
+        // switch instead (WORK-0036).
+        await pumpBackground(
+          tester,
+          background: const AnnotationBackground.color(Colors.red),
+          canvasSize: const Size(300, 400),
+          controller: c,
+          sourceImageSize: const Size(500, 1000),
+          onBindingChanged: (b) => reported = b,
+        );
+
+        expect(reported, AnnotationBinding.sizeMismatch);
+      },
+    );
+
+    testWidgets('no sourceImageSize hint means no binding is ever reported', (
+      tester,
+    ) async {
+      var calls = 0;
+      await pumpBackground(
+        tester,
+        background: const AnnotationBackground.color(Colors.blue),
+        canvasSize: const Size(500, 1000),
+        onBindingChanged: (b) => calls++,
+      );
+
+      expect(calls, 0,
+          reason: 'absence of a hint is not evidence of a mismatch, the '
+              'same rule classifyBinding itself follows');
     });
   });
 }

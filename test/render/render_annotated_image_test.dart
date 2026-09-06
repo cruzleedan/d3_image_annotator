@@ -561,4 +561,148 @@ void main() {
       );
     });
   });
+
+  group('blank-canvas mode: renderAnnotatedCanvas (WORK-0036)', () {
+    const blue = Color(0xFF0000FF);
+
+    test('a colour background renders as a solid fill of that colour',
+        () async {
+      final bytes = await renderAnnotatedCanvas(
+        color: blue,
+        size: const Size(200, 200),
+        annotations: const [],
+      );
+
+      final rendered = await _decode(bytes);
+      addTearDown(rendered.dispose);
+      expect(rendered.width, 200);
+      expect(rendered.height, 200);
+      expect(await _pixelAt(rendered, 0.1, 0.1), blue);
+      expect(await _pixelAt(rendered, 0.9, 0.9), blue);
+    });
+
+    test('an annotation lands on a colour background the same way it '
+        'would on an image', () async {
+      final bytes = await renderAnnotatedCanvas(
+        color: blue,
+        size: const Size(400, 400),
+        annotations: [
+          filledRect(left: 0, top: 0, right: 0.5, bottom: 0.5),
+        ],
+      );
+
+      final rendered = await _decode(bytes);
+      addTearDown(rendered.dispose);
+      expect(await _pixelAt(rendered, 0.25, 0.25), red,
+          reason: 'inside the annotation');
+      expect(await _pixelAt(rendered, 0.75, 0.75), blue,
+          reason: 'outside it, the colour background shows through');
+    });
+
+    test('a mark outside a crop is clipped away against a colour '
+        'background, the same as against an image', () async {
+      // The obligation this item's DoD calls out explicitly: crop
+      // clipping of annotations must carry over to a colour background
+      // unchanged, verified here rather than assumed.
+      final bytes = await renderAnnotatedCanvas(
+        color: blue,
+        size: const Size(400, 400),
+        annotations: [
+          filledRect(left: 0, top: 0, right: 0.15, bottom: 0.15),
+        ],
+        transform: ImageTransform(
+          cropRect: NormalizedRect(left: 0.5, top: 0.5, right: 1, bottom: 1),
+        ),
+      );
+
+      final rendered = await _decode(bytes);
+      addTearDown(rendered.dispose);
+      expect(rendered.width, 200);
+      expect(rendered.height, 200);
+      for (final at in const [0.1, 0.5, 0.9]) {
+        expect(await _pixelAt(rendered, at, at), blue,
+            reason: 'the mark lies outside what the crop kept');
+      }
+    });
+
+    test('an image background still works through the same function',
+        () async {
+      final source = await _whiteImage(200, 200);
+
+      final bytes = await renderAnnotatedCanvas(
+        imageBytes: source,
+        size: const Size(200, 200),
+        annotations: [
+          filledRect(left: 0, top: 0, right: 0.5, bottom: 0.5),
+        ],
+      );
+
+      final rendered = await _decode(bytes);
+      addTearDown(rendered.dispose);
+      expect(await _pixelAt(rendered, 0.25, 0.25), red);
+      expect(await _pixelAt(rendered, 0.75, 0.75), const Color(0xFFFFFFFF));
+    });
+
+    test('exactly one of imageBytes or color must be given', () {
+      expect(
+        () => renderAnnotatedCanvas(
+          size: const Size(200, 200),
+          annotations: const [],
+        ),
+        throwsA(isA<AssertionError>()),
+      );
+    });
+
+    test('synthesizeSolidImage produces a real ui.Image of the given size',
+        () async {
+      final image = await synthesizeSolidImage(blue, const Size(50, 30));
+      addTearDown(image.dispose);
+
+      expect(image.width, 50);
+      expect(image.height, 30);
+    });
+
+    for (final entry in <String, Annotation>{
+      'rectangle': RectangleAnnotation(
+        id: 'r',
+        style: const AnnotationStyle(color: red, filled: true),
+        rect: NormalizedRect(left: 0.2, top: 0.2, right: 0.6, bottom: 0.6),
+      ),
+      'circle': CircleAnnotation(
+        id: 'c',
+        style: const AnnotationStyle(color: red, filled: true),
+        rect: NormalizedRect(left: 0.2, top: 0.2, right: 0.6, bottom: 0.6),
+      ),
+      'arrow': const ArrowAnnotation(
+        id: 'a',
+        style: AnnotationStyle(color: red, strokeWidth: 0.05),
+        start: NormalizedPoint(0.2, 0.2),
+        end: NormalizedPoint(0.6, 0.6),
+      ),
+      'freehand': FreehandAnnotation(
+        id: 'f',
+        style: const AnnotationStyle(color: red, strokeWidth: 0.05),
+        points: const [NormalizedPoint(0.2, 0.2), NormalizedPoint(0.6, 0.6)],
+      ),
+    }.entries) {
+      test(
+        'a ${entry.key} paints visibly onto a colour background',
+        () async {
+          final bytes = await renderAnnotatedCanvas(
+            color: blue,
+            size: const Size(400, 400),
+            annotations: [entry.value],
+          );
+
+          final rendered = await _decode(bytes);
+          addTearDown(rendered.dispose);
+          expect(await _pixelAt(rendered, 0.4, 0.4), red,
+              reason: 'every annotation type crosses its own diagonal '
+                  'midpoint');
+          expect(await _pixelAt(rendered, 0.05, 0.95), blue,
+              reason: 'a far corner stays the plain background colour');
+        },
+      );
+    }
+  });
 }

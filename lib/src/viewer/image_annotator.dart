@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../annotations/annotation_binding.dart';
+import '../annotations/annotation_codec.dart' show AnnotationDocument;
 import '../annotations/annotation_controller.dart';
 import '../annotations/annotation_overlay_widget.dart';
 import '../annotations/annotation_painter.dart';
@@ -9,13 +11,16 @@ import '../annotations/annotation_style.dart';
 import '../annotations/annotation_tool.dart';
 import '../geometry/image_fit.dart';
 import '../geometry/image_transform.dart';
+import 'annotation_background.dart';
 import 'crop_overlay.dart';
 
-/// A zoomable, annotatable image.
+/// A zoomable, annotatable canvas.
 ///
-/// Works on any [ImageProvider] -- a file from disk, a freshly captured
-/// photo, an asset, a network image. Nothing here knows or cares what
-/// produced the image.
+/// Works on any [AnnotationBackground] -- a real image (a file from
+/// disk, a freshly captured photo, an asset, a network image) or a
+/// plain colour fill (WORK-0036), swappable at runtime. Nothing here
+/// knows or cares what produced an image background; a colour
+/// background needs no background at all beyond a fill colour.
 ///
 /// **Gestures.** One finger draws with the active [tool]; two fingers
 /// pinch to zoom and pan. There is no mode to toggle, matching Apple
@@ -39,8 +44,8 @@ import 'crop_overlay.dart';
 class D3ImageAnnotator extends StatefulWidget {
   const D3ImageAnnotator({
     super.key,
-    required this.image,
-    required this.imageSize,
+    required this.background,
+    required this.canvasSize,
     required this.controller,
     this.tool = AnnotationTool.rectangle,
     this.fit = ImageFit.contain,
@@ -52,16 +57,31 @@ class D3ImageAnnotator extends StatefulWidget {
     this.cropping = false,
     this.onCropChanged,
     this.cropInset = 28,
+    this.sourceImageSize,
+    this.onBindingChanged,
   });
 
-  final ImageProvider image;
+  /// What sits behind the annotations: a real image, or a plain colour
+  /// fill (WORK-0036). Swappable at runtime -- the consumer app rebuilds
+  /// this widget with a new value (image to colour, colour to image, or
+  /// image to a different image) without losing existing annotations,
+  /// which live independently of any particular background.
+  final AnnotationBackground background;
 
-  /// The image's pixel dimensions. Required rather than resolved from
-  /// [image] because layout has to happen before the image decodes, and
-  /// a box that resizes on decode would move annotations under the
-  /// user. Callers generally know this already (a capture result, EXIF,
-  /// or a database row).
-  final Size imageSize;
+  /// The canvas's pixel dimensions -- the annotation coordinate space's
+  /// size, regardless of what [background] is.
+  ///
+  /// Always explicit, never resolved from a decoded image or from this
+  /// widget's own layout constraints, and required unconditionally
+  /// rather than only for a colour background: layout has to happen
+  /// before an image decodes (a box that resized on decode would move
+  /// annotations under the user), and deriving it from the viewport
+  /// would tie the coordinate space to whatever screen happened to be
+  /// open, complicating export and reopening the same document later at
+  /// a different size. Callers generally know this already (a capture
+  /// result, EXIF, a database row, or a deliberately chosen canvas size
+  /// for a blank document).
+  final Size canvasSize;
 
   final AnnotationController controller;
   final AnnotationTool tool;
@@ -111,6 +131,25 @@ class D3ImageAnnotator extends StatefulWidget {
   /// would waste space for no benefit.
   final double cropInset;
 
+  /// The pixel dimensions the current annotations were originally drawn
+  /// against, when known -- an `AnnotationDocument.sourceImageSize`
+  /// hint, passed through so this widget can classify a background
+  /// switch the same way `classifyBinding` already classifies a
+  /// document reload (WORK-0036). Null skips the check ([onBindingChanged]
+  /// is never called), matching `classifyBinding`'s own "no hint
+  /// recorded" behaviour.
+  final Size? sourceImageSize;
+
+  /// Reports how [canvasSize] relates to [sourceImageSize] whenever
+  /// either changes -- the same `classifyBinding` question
+  /// `annotation_binding.dart` already answers for a document reload
+  /// (WORK-0029), asked here at the moment of a live background switch
+  /// instead. Advisory, like `classifyBinding` itself: this widget never
+  /// acts on the result (rescaling annotations or refusing to switch),
+  /// it only reports it for the consumer app to decide what a mismatch
+  /// means.
+  final ValueChanged<AnnotationBinding>? onBindingChanged;
+
   @override
   State<D3ImageAnnotator> createState() => _D3ImageAnnotatorState();
 }
@@ -121,6 +160,43 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
   TransformationController get _transform =>
       widget.transformationController ??
       (_ownedController ??= TransformationController());
+
+  @override
+  void initState() {
+    super.initState();
+    _reportBindingIfChanged(previousCanvasSize: null);
+  }
+
+  @override
+  void didUpdateWidget(D3ImageAnnotator oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Fires on a canvas-size change *or* a background swap -- a switch
+    // from an image to a colour (or to a different image) is exactly
+    // the moment WORK-0036 wires this classifier to, alongside the
+    // existing "size actually changed" case.
+    if (widget.canvasSize != oldWidget.canvasSize ||
+        widget.background != oldWidget.background ||
+        widget.sourceImageSize != oldWidget.sourceImageSize) {
+      _reportBindingIfChanged(previousCanvasSize: oldWidget.canvasSize);
+    }
+  }
+
+  /// Classifies `widget.canvasSize` against `widget.sourceImageSize` and
+  /// reports it via `widget.onBindingChanged` -- the same
+  /// `classifyBinding` question `annotation_binding.dart` already
+  /// answers for a document reload (WORK-0029), asked here at the
+  /// moment of a live background/size switch. `previousCanvasSize` is
+  /// unused beyond documenting *why* this runs; the classification
+  /// itself only ever depends on the current values.
+  void _reportBindingIfChanged({required Size? previousCanvasSize}) {
+    final hint = widget.sourceImageSize;
+    if (hint == null) return;
+    final binding = classifyBinding(
+      AnnotationDocument(annotations: const [], sourceImageSize: hint),
+      widget.canvasSize,
+    );
+    widget.onBindingChanged?.call(binding);
+  }
 
   @override
   void dispose() {
@@ -175,7 +251,7 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
     );
     final rect = computeImageContentRect(
       widgetSize: available,
-      contentSize: widget.controller.transform.resultSize(widget.imageSize),
+      contentSize: widget.controller.transform.resultSize(widget.canvasSize),
       fit: widget.fit,
     );
     return rect.shift(Offset(inset, inset));
@@ -217,8 +293,8 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
                       children: [
                         Positioned.fromRect(
                           rect: contentRect,
-                          child: _TransformedImage(
-                            image: widget.image,
+                          child: _TransformedBackground(
+                            background: widget.background,
                             imageTransform: widget.controller.transform,
                           ),
                         ),
@@ -230,7 +306,7 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
               if (!widget.cropping)
                 AnnotationOverlay(
                   controller: widget.controller,
-                  imageSize: widget.imageSize,
+                  imageSize: widget.canvasSize,
                   tool: widget.tool,
                   fit: widget.fit,
                   transform: _transform.value,
@@ -282,28 +358,39 @@ class _D3ImageAnnotatorState extends State<D3ImageAnnotator> {
 
 }
 
-/// Draws the image with the rotate / mirror / crop applied.
+/// Draws [background] with the rotate / mirror / crop applied.
 ///
 /// Crop is done with alignment and a fitted box rather than by cutting
 /// pixels: nothing is destroyed, so clearing the crop restores the
 /// original view immediately.
-class _TransformedImage extends StatelessWidget {
-  const _TransformedImage({
-    required this.image,
+///
+/// A colour background skips all of that (WORK-0036): rotating, mirroring,
+/// or windowing a plain fill onto itself is a visual no-op by
+/// construction (a uniform colour looks identical from every angle and
+/// through every crop window), so there is nothing for this widget to
+/// apply -- only annotation clipping at the crop boundary needs to keep
+/// working for a colour background, and that happens in
+/// `annotation_painter.dart` against the annotations, not here against
+/// the background's pixels.
+class _TransformedBackground extends StatelessWidget {
+  const _TransformedBackground({
+    required this.background,
     required this.imageTransform,
   });
 
-  final ImageProvider image;
+  final AnnotationBackground background;
   final ImageTransform imageTransform;
 
   @override
-  @override
   Widget build(BuildContext context) {
+    final color = colorOf(background);
+    if (color != null) return ColoredBox(color: color);
+
     // BoxFit.fill, not contain: the caller has already sized this box to
     // the transformed image's exact aspect ratio, so filling it is
     // correct and letterboxing inside it would inset the picture away
     // from the annotations.
-    Widget child = Image(image: image, fit: BoxFit.fill);
+    Widget child = Image(image: imageOf(background)!, fit: BoxFit.fill);
 
     final crop = imageTransform.cropRect;
     if (crop != null) {
