@@ -116,6 +116,21 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
   /// reuse `_draft`/`_dragStart`.
   _TextEditSession? _textEdit;
 
+  /// Set for exactly one subsequent [_onPanStart] call after a text
+  /// session is dismissed by tapping outside it, then always cleared --
+  /// consumed whether or not it actually suppresses anything.
+  ///
+  /// `_textEdit != null` alone cannot guard this: `TextField`'s
+  /// `onTapOutside` fires on the global pointer router as soon as the
+  /// down event arrives, which runs *before* this detector's own
+  /// gesture-arena-mediated `onScaleStart` resolves for that same tap --
+  /// so by the time `_onPanStart` actually runs, `onTapOutside` has
+  /// already committed and cleared `_textEdit`, and a `_textEdit != null`
+  /// check alone would see nothing to suppress and open a brand new
+  /// session right at the dismissing tap. This flag survives across
+  /// exactly that gap instead.
+  bool _suppressNextPanStart = false;
+
   int _idCounter = 0;
 
 
@@ -166,6 +181,26 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
   }
 
   void _onPanStart(Offset localRaw, Rect contentRect) {
+    // A text-entry session is still open. `TextField.onTapOutside` fires
+    // on this same pointer-down to commit/close it, but that is a
+    // notification, not a gesture-arena win -- it does not stop this
+    // detector (a sibling in the Stack, not an ancestor) from also
+    // seeing the tap. Without this guard, tapping away from an open
+    // text field both committed the text *and* opened a brand new
+    // (empty) text session at the tapped point, since `widget.tool` is
+    // still `text` -- found on-device as "the text I just typed gets
+    // duplicated to the coordinate I tapped into". The tap that
+    // dismisses text entry must only dismiss it, never also start a new
+    // gesture. `_textEdit != null` alone is not enough to detect this,
+    // since `onTapOutside` (a global pointer-router callback) has
+    // already run and cleared it by the time this gesture-arena-mediated
+    // callback fires for the very same tap -- `_suppressNextPanStart`
+    // covers that gap; see its own doc comment.
+    if (_textEdit != null || _suppressNextPanStart) {
+      _suppressNextPanStart = false;
+      return;
+    }
+
     final point = _toOriginalImagePoint(localRaw, contentRect);
 
     // Selection wins the tap, regardless of which tool is active
@@ -549,6 +584,8 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
                       style: widget.controller.style,
                       onCommit: _commitTextEdit,
                       onCancel: _cancelTextEdit,
+                      onDismissedByTapOutside: () =>
+                          _suppressNextPanStart = true,
                     ),
                   ),
               ],
@@ -754,6 +791,7 @@ class _TextEntryOverlay extends StatefulWidget {
     required this.style,
     required this.onCommit,
     required this.onCancel,
+    required this.onDismissedByTapOutside,
   });
 
   final _TextEditSession session;
@@ -767,6 +805,13 @@ class _TextEntryOverlay extends StatefulWidget {
 
   final ValueChanged<String> onCommit;
   final VoidCallback onCancel;
+
+  /// Called (in addition to [onCommit]) when the field is dismissed by
+  /// tapping elsewhere on the canvas, as opposed to the keyboard's done
+  /// action -- lets the parent suppress the *next* gesture-start, since
+  /// that same tap is about to reach the drawing `GestureDetector`
+  /// beneath as well (see `_suppressNextPanStart`'s own doc comment).
+  final VoidCallback onDismissedByTapOutside;
 
   @override
   State<_TextEntryOverlay> createState() => _TextEntryOverlayState();
@@ -850,7 +895,10 @@ class _TextEntryOverlayState extends State<_TextEntryOverlay> {
                     border: InputBorder.none,
                     contentPadding: EdgeInsets.zero,
                   ),
-                  onTapOutside: (_) => widget.onCommit(_controller.text),
+                  onTapOutside: (_) {
+                    widget.onCommit(_controller.text);
+                    widget.onDismissedByTapOutside();
+                  },
                 ),
               ),
             ),

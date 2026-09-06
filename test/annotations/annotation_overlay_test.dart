@@ -559,6 +559,36 @@ void main() {
       expect(find.byTooltip('Duplicate'), findsNothing);
     });
 
+    testWidgets(
+      'the floating controls draw an opaque backdrop behind their icon, '
+      'not a bare icon on the image',
+      (tester) async {
+        // Regression test for a real bug found on-device: the duplicate
+        // (+1) button defaults to a white icon, which was all but
+        // invisible drawn directly onto a light or white photo with
+        // nothing behind it.
+        final controller = AnnotationController()..add(target());
+        controller.select('target');
+        await pumpOverlay(
+          tester,
+          tool: AnnotationTool.rectangle,
+          controller: controller,
+        );
+
+        final backdrop = tester.widget<DecoratedBox>(
+          find.ancestor(
+            of: find.byIcon(Icons.add_box_outlined),
+            matching: find.byType(DecoratedBox),
+          ),
+        );
+        final decoration = backdrop.decoration as BoxDecoration;
+        expect(decoration.shape, BoxShape.circle);
+        expect(decoration.color, isNotNull);
+        expect(decoration.color!.a, greaterThan(0),
+            reason: 'the backdrop must not be fully transparent');
+      },
+    );
+
     testWidgets('the floating x deletes the selection as one undo step', (
       tester,
     ) async {
@@ -668,6 +698,42 @@ void main() {
       expect(find.byType(TextField), findsNothing,
           reason: 'the field closes once committed');
     });
+
+    testWidgets(
+      'tapping elsewhere on the canvas commits the open text once, and '
+      'does not also open a second field at the new tap point',
+      (tester) async {
+        // Regression test for a real bug found on-device: TextField's
+        // onTapOutside fires on the same pointer-down that dismisses it,
+        // but that is a notification, not a gesture-arena win -- it does
+        // not stop the drawing GestureDetector beneath (a sibling, not
+        // an ancestor) from also seeing that tap. Since the text tool
+        // was still active, that second look opened a brand new (empty)
+        // text session at wherever the user tapped -- perceived as "the
+        // text I just typed gets duplicated to the coordinate I tapped
+        // into".
+        final c = await pumpOverlay(tester, tool: AnnotationTool.text);
+
+        await tester.tapAt(at(0.2, 0.2));
+        await tester.pump();
+        await tester.enterText(find.byType(TextField), 'hello');
+
+        await tester.tapAt(at(0.8, 0.8));
+        await tester.pumpAndSettle();
+
+        expect(c.annotations, hasLength(1),
+            reason: 'the tap-away must commit the open text, not spawn a '
+                'second annotation');
+        final placed = c.annotations.single as TextAnnotation;
+        expect(placed.text, 'hello');
+        expect(placed.position.x, closeTo(0.2, 0.05),
+            reason: 'the committed text must stay where it was typed, '
+                'not jump to the dismissing tap');
+        expect(find.byType(TextField), findsNothing,
+            reason: 'the tap-away must not leave a second field open at '
+                'the new tap point');
+      },
+    );
 
     testWidgets('an empty submit discards without creating an annotation', (
       tester,

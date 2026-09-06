@@ -332,6 +332,18 @@ Annotation? resizeRotatedAnnotation(
   ImageTransform transform, {
   double minimumExtent = 0.01,
 }) {
+  // Text has no independent width/height to stretch -- its box is
+  // derived entirely from `AnnotationStyle.fontSize` (see
+  // `textBoundsInPixels`), so "corner-drag resize" for text means
+  // scaling `fontSize`, not rebuilding a rect. Handled once here,
+  // before the unrotated fast path below, since the scaling itself
+  // (a ratio of two pixel-space distances from the fixed opposite
+  // corner) is already rotation-agnostic -- unlike a rect resize, it
+  // needs no inverse-rotation step at all.
+  if (annotation is TextAnnotation) {
+    return _resizeTextByFontSize(annotation, grip, pixelPosition, contentRect, transform);
+  }
+
   final rotation = rotationOf(annotation);
   if (rotation == 0.0) {
     final point = _toOriginalSpace(pixelPosition, contentRect, transform);
@@ -391,8 +403,105 @@ Annotation? resizeRotatedAnnotation(
     RectangleAnnotation() => annotation.copyWith(rect: newRect),
     CircleAnnotation() => annotation.copyWith(rect: newRect),
     ImageAnnotation() => annotation.copyWith(rect: newRect),
+    // Unreachable: resizeRotatedAnnotation handles TextAnnotation itself,
+    // before this function's body runs at all, and arrows/freehand have
+    // no rect-corner grips for _dragSelection to have called this with
+    // in the first place (see _oppositeCornerGrip).
     TextAnnotation() || ArrowAnnotation() || FreehandAnnotation() => null,
   };
+}
+
+/// Scales a [TextAnnotation]'s `fontSize` from a corner-drag, in place of
+/// stretching a rect -- text has none (see [resizeRotatedAnnotation]'s
+/// own doc comment for why this case is split out).
+///
+/// The scale factor is the ratio of two pixel-space distances, both
+/// measured from the diagonally-opposite (anchor) corner: how far
+/// [pixelPosition] is from it now, versus how far the dragged corner
+/// itself currently is. This needs no inverse-rotation step to compute
+/// the *factor* -- a distance between two world-space points is the same
+/// number regardless of which way the text is rotated.
+///
+/// Keeping the anchor corner visually fixed does need one, though:
+/// [TextAnnotation.position] is always the box's top-left corner in its
+/// own unrotated frame, so growing the font while leaving that position
+/// untouched would only look right for a bottomRight drag (whose anchor
+/// *is* top-left). For the other three grips, the corner that must stay
+/// put is a different corner of the box, which shifts in world space the
+/// moment the box grows around a fixed top-left -- so the position
+/// itself has to move by the same rotate/resize/inverse-rotate
+/// construction [resizeRotatedAnnotation] uses for a rect, just with the
+/// box size re-measured at the new font size instead of dragged to a
+/// new extent.
+Annotation? _resizeTextByFontSize(
+  TextAnnotation annotation,
+  AnnotationGrip grip,
+  Offset pixelPosition,
+  Rect contentRect,
+  ImageTransform transform, {
+  double minimumFontSize = 0.005,
+}) {
+  final opposite = _oppositeCornerGrip(grip);
+  if (opposite == null) return null;
+
+  final positions = gripPositionsInPixels(annotation, contentRect, transform);
+  final anchorWorld = positions[opposite]!;
+  final dragged = positions[grip]!;
+
+  final currentDistance = (dragged - anchorWorld).distance;
+  if (currentDistance < 1e-6) return null;
+  final newDistance = (pixelPosition - anchorWorld).distance;
+
+  final scale = newDistance / currentDistance;
+  final newFontSize = (annotation.style.fontSize * scale).clamp(
+    minimumFontSize,
+    1.0,
+  );
+  final resized = annotation.copyWithStyle(
+    annotation.style.copyWith(fontSize: newFontSize),
+  );
+
+  // Re-measure the box at the new font size (same position for now, just
+  // to learn its new pixel width/height), then solve for the position
+  // that puts the *anchor corner* -- not necessarily top-left -- back
+  // at anchorWorld once rotation is reapplied about the new center.
+  final rotation = rotationOf(annotation);
+  final newSize = textBoundsInPixels(resized, contentRect, transform).size;
+
+  // anchorWorld is fixed and known; the box's unrotated top-left is
+  // `newSize` away from anchorWorld along axes that depend on which
+  // corner anchorWorld actually is. Express the unrotated box's corners
+  // relative to its own unrotated top-left, find which offset
+  // corresponds to `opposite`, then place the unrotated top-left so that
+  // corner, once rotated about the box's own center, lands on
+  // anchorWorld.
+  final localOffsetOfOpposite = switch (opposite) {
+    AnnotationGrip.topLeft => Offset.zero,
+    AnnotationGrip.topRight => Offset(newSize.width, 0),
+    AnnotationGrip.bottomLeft => Offset(0, newSize.height),
+    AnnotationGrip.bottomRight => Offset(newSize.width, newSize.height),
+    AnnotationGrip.start ||
+    AnnotationGrip.end ||
+    AnnotationGrip.rotate => Offset.zero,
+  };
+  final halfDiagonal = Offset(newSize.width / 2, newSize.height / 2);
+  // Vector from the unrotated box's center to `opposite`'s unrotated
+  // position, then rotated -- so the same vector, applied backwards from
+  // anchorWorld, gives the new (rotated) center directly.
+  final centerToOpposite = localOffsetOfOpposite - halfDiagonal;
+  final rotatedCenterToOpposite = rotation == 0.0
+      ? centerToOpposite
+      : Offset(
+          centerToOpposite.dx * math.cos(rotation) -
+              centerToOpposite.dy * math.sin(rotation),
+          centerToOpposite.dx * math.sin(rotation) +
+              centerToOpposite.dy * math.cos(rotation),
+        );
+  final newCenter = anchorWorld - rotatedCenterToOpposite;
+  final newTopLeftWorld = newCenter - halfDiagonal;
+
+  final newPosition = _toOriginalSpace(newTopLeftWorld, contentRect, transform);
+  return resized.copyWith(position: newPosition);
 }
 
 /// The inverse of [mapPointToPixels] followed by

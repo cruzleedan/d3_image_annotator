@@ -598,4 +598,119 @@ void main() {
           reason: 'the duplicate must be offset, not exactly overlapping');
     });
   });
+
+  group('text corner-drag resize (scales fontSize, not a rect)', () {
+    // Centred with generous margin, so a moderate resize in any
+    // direction (including the anchor-corner shift a rotated resize
+    // causes) stays within contentRect -- a target that lands outside
+    // it would be clamped by `_toOriginalSpace`, corrupting the very
+    // position this group is checking rather than exercising the
+    // resize math itself.
+    const text = TextAnnotation(
+      id: 't',
+      style: AnnotationStyle(fontSize: 0.05),
+      position: NormalizedPoint(0.4, 0.45),
+      text: 'hello world',
+    );
+
+    test('dragging a corner outward grows fontSize, undoably distinct '
+        'from the original', () {
+      final positions = gripPositionsInPixels(
+        text,
+        contentRect,
+        ImageTransform.identity,
+      );
+      final anchor = positions[AnnotationGrip.topLeft]!;
+      final dragged = positions[AnnotationGrip.bottomRight]!;
+      // Drag bottomRight twice as far from the anchor as it already is.
+      final target = anchor + (dragged - anchor) * 2;
+
+      final resized = resizeRotatedAnnotation(
+        text,
+        AnnotationGrip.bottomRight,
+        target,
+        contentRect,
+        ImageTransform.identity,
+      )! as TextAnnotation;
+
+      expect(resized.style.fontSize, greaterThan(text.style.fontSize));
+      expect(resized.text, text.text, reason: 'resize must not touch content');
+    });
+
+    test('dragging inward shrinks fontSize but never below the floor', () {
+      final positions = gripPositionsInPixels(
+        text,
+        contentRect,
+        ImageTransform.identity,
+      );
+      final anchor = positions[AnnotationGrip.topLeft]!;
+      final dragged = positions[AnnotationGrip.bottomRight]!;
+      // Drag almost on top of the anchor -- a near-zero result.
+      final target = anchor + (dragged - anchor) * 0.001;
+
+      final resized = resizeRotatedAnnotation(
+        text,
+        AnnotationGrip.bottomRight,
+        target,
+        contentRect,
+        ImageTransform.identity,
+      )! as TextAnnotation;
+
+      expect(resized.style.fontSize, lessThan(text.style.fontSize));
+      expect(resized.style.fontSize, greaterThan(0));
+    });
+
+    for (final grip in [
+      AnnotationGrip.topLeft,
+      AnnotationGrip.topRight,
+      AnnotationGrip.bottomLeft,
+      AnnotationGrip.bottomRight,
+    ]) {
+      test(
+        'dragging $grip keeps the diagonally-opposite corner fixed on '
+        'screen, at 30 degrees of rotation',
+        () {
+          final rotated = text.copyWith(rotation: math.pi / 6);
+          final before = gripPositionsInPixels(
+            rotated,
+            contentRect,
+            ImageTransform.identity,
+          );
+          final opposite = switch (grip) {
+            AnnotationGrip.topLeft => AnnotationGrip.bottomRight,
+            AnnotationGrip.topRight => AnnotationGrip.bottomLeft,
+            AnnotationGrip.bottomLeft => AnnotationGrip.topRight,
+            AnnotationGrip.bottomRight => AnnotationGrip.topLeft,
+            _ => throw StateError('unreachable'),
+          };
+          final anchorBefore = before[opposite]!;
+          final draggedBefore = before[grip]!;
+          final target = anchorBefore + (draggedBefore - anchorBefore) * 1.15;
+
+          final resized = resizeRotatedAnnotation(
+            rotated,
+            grip,
+            target,
+            contentRect,
+            ImageTransform.identity,
+          )! as TextAnnotation;
+
+          final after = gripPositionsInPixels(
+            resized,
+            contentRect,
+            ImageTransform.identity,
+          );
+          final anchorAfter = after[opposite]!;
+
+          expect(
+            (anchorAfter - anchorBefore).distance,
+            lessThan(1e-6),
+            reason: 'the opposite corner must not move on screen when '
+                '$grip is dragged',
+          );
+          expect(resized.style.fontSize, isNot(rotated.style.fontSize));
+        },
+      );
+    }
+  });
 }
