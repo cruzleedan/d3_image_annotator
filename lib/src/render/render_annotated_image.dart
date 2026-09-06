@@ -66,8 +66,14 @@ import 'render_options.dart';
 /// — about 40 dropped frames. **Show a progress indicator**, and prefer
 /// the bounded default unless the original resolution is genuinely
 /// needed. Rendering several images for one report multiplies this:
-/// ten at full resolution is close to seven seconds. WORK-0030 tracks
-/// making that case better.
+/// ten at full resolution is close to seven seconds.
+///
+/// Most of that is removable and is being removed. A stage breakdown
+/// puts PNG encoding at 541 ms of the 648 ms total, against 26 ms for
+/// compositing; encoding is mostly deflate and can run in a background
+/// isolate, which takes the worst frame to ~134 ms at the same
+/// wall-clock cost. WORK-0030 tracks that change and WORK-0031 the
+/// multi-image case. Until then the numbers above are what to expect.
 Future<Uint8List> renderAnnotatedImage({
   required Uint8List imageBytes,
   required List<Annotation> annotations,
