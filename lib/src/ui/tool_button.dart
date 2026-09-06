@@ -234,7 +234,7 @@ class D3CloseButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _HistoryAction(
+    return D3FloatingButton(
       icon: Icons.close,
       tooltip: tooltip,
       color: Colors.white,
@@ -271,13 +271,13 @@ class D3HistoryBar extends StatelessWidget {
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _HistoryAction(
+            D3FloatingButton(
               icon: Icons.undo,
               tooltip: 'Undo',
               color: foregroundColor,
               onPressed: controller.canUndo ? controller.undo : null,
             ),
-            _HistoryAction(
+            D3FloatingButton(
               icon: Icons.redo,
               tooltip: 'Redo',
               color: foregroundColor,
@@ -286,7 +286,7 @@ class D3HistoryBar extends StatelessWidget {
             // One control for both: removes the selection when there is
             // one, otherwise clears everything. The tooltip and tint say
             // which, so the difference is not hidden behind a guess.
-            _HistoryAction(
+            D3FloatingButton(
               icon: hasSelection ? Icons.delete : Icons.delete_outline,
               tooltip: hasSelection ? 'Delete selected' : 'Clear all',
               color: hasSelection ? Colors.redAccent : foregroundColor,
@@ -308,8 +308,22 @@ class D3HistoryBar extends StatelessWidget {
   }
 }
 
-class _HistoryAction extends StatelessWidget {
-  const _HistoryAction({
+/// A circular icon-only button, sized to a guaranteed touch target, with
+/// no caption.
+///
+/// The undo/redo/clear/close icons here are self-evident (a familiar
+/// system glyph, or one used only once so there is nothing to confuse
+/// it with) in a way crop/straighten/mirror are not — that is what
+/// [D3ToolButton]'s caption exists for, and why this stays uncaptioned
+/// rather than duplicating that pattern.
+///
+/// Also used for floating shape controls (WORK-0035): a delete/duplicate
+/// icon sitting directly on a small selected shape has no room for a
+/// label either, and the same "obvious from the icon alone" reasoning
+/// applies to a × or a +1.
+class D3FloatingButton extends StatelessWidget {
+  const D3FloatingButton({
+    super.key,
     required this.icon,
     required this.tooltip,
     required this.color,
