@@ -148,6 +148,24 @@ class AnnotationController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Adds a copy of the selected annotation with id [newId], selecting
+  /// the copy rather than the original (WORK-0035).
+  ///
+  /// [newId] is a parameter, not generated here: every annotation's id
+  /// is supplied externally at construction (`add` never invents one),
+  /// so this stays a single source of id generation with the overlay
+  /// widget's own injectable id generator, rather than becoming a
+  /// second, inconsistent one. No-op if nothing is selected.
+  void duplicateSelected(String newId) {
+    final original = selected;
+    if (original == null) return;
+    final copy = duplicateAnnotation(original, newId);
+    _pushUndo();
+    _annotations.add(copy);
+    _selectedId = newId;
+    notifyListeners();
+  }
+
   void clear() {
     if (_annotations.isEmpty) return;
     _pushUndo();

@@ -283,7 +283,7 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
 
     final dx = point.x - anchor.x;
     final dy = point.y - anchor.y;
-    final moved = _translate(original, dx, dy);
+    final moved = translateAnnotation(original, dx, dy);
     if (moved != null) widget.controller.update(id, moved);
   }
 
@@ -411,83 +411,25 @@ bool _isDegenerate(Annotation annotation) {
   };
 }
 
+/// Gives a freshly-drawn draft its final id, preserving every other
+/// field including `rotation` where it exists.
+///
+/// A draft is always constructed with `rotation: 0.0` by `_onPanStart`'s
+/// switch -- there is no drawing gesture that produces a rotated shape
+/// -- so this only ever runs on an unrotated shape today. It still
+/// preserves rotation explicitly rather than dropping it, so it cannot
+/// become a silent bug if that ever changes.
 Annotation _withId(Annotation annotation, String id) {
   return switch (annotation) {
-    RectangleAnnotation(:final style, :final rect) =>
-      RectangleAnnotation(id: id, style: style, rect: rect),
-    CircleAnnotation(:final style, :final rect) =>
-      CircleAnnotation(id: id, style: style, rect: rect),
+    RectangleAnnotation(:final style, :final rect, :final rotation) =>
+      RectangleAnnotation(id: id, style: style, rect: rect, rotation: rotation),
+    CircleAnnotation(:final style, :final rect, :final rotation) =>
+      CircleAnnotation(id: id, style: style, rect: rect, rotation: rotation),
     ArrowAnnotation(:final style, :final start, :final end) =>
       ArrowAnnotation(id: id, style: style, start: start, end: end),
     FreehandAnnotation(:final style, :final points) =>
       FreehandAnnotation(id: id, style: style, points: points),
   };
-}
-
-/// Translates an annotation by a normalized delta, or returns null if
-/// the move would push it outside the image.
-///
-/// Refusing the move rather than clamping is deliberate: clamping each
-/// coordinate independently would squash a shape against the edge,
-/// silently changing its size as well as its position.
-Annotation? _translate(Annotation annotation, double dx, double dy) {
-  bool inRange(double v) => v >= 0 && v <= 1;
-
-  switch (annotation) {
-    case RectangleAnnotation(:final rect):
-      if (!inRange(rect.left + dx) ||
-          !inRange(rect.right + dx) ||
-          !inRange(rect.top + dy) ||
-          !inRange(rect.bottom + dy)) {
-        return null;
-      }
-      return annotation.copyWith(
-        rect: NormalizedRect(
-          left: rect.left + dx,
-          top: rect.top + dy,
-          right: rect.right + dx,
-          bottom: rect.bottom + dy,
-        ),
-      );
-
-    case CircleAnnotation(:final rect):
-      if (!inRange(rect.left + dx) ||
-          !inRange(rect.right + dx) ||
-          !inRange(rect.top + dy) ||
-          !inRange(rect.bottom + dy)) {
-        return null;
-      }
-      return annotation.copyWith(
-        rect: NormalizedRect(
-          left: rect.left + dx,
-          top: rect.top + dy,
-          right: rect.right + dx,
-          bottom: rect.bottom + dy,
-        ),
-      );
-
-    case ArrowAnnotation(:final start, :final end):
-      if (!inRange(start.x + dx) ||
-          !inRange(end.x + dx) ||
-          !inRange(start.y + dy) ||
-          !inRange(end.y + dy)) {
-        return null;
-      }
-      return annotation.copyWith(
-        start: NormalizedPoint(start.x + dx, start.y + dy),
-        end: NormalizedPoint(end.x + dx, end.y + dy),
-      );
-
-    case FreehandAnnotation(:final points):
-      for (final p in points) {
-        if (!inRange(p.x + dx) || !inRange(p.y + dy)) return null;
-      }
-      return annotation.copyWith(
-        points: [
-          for (final p in points) NormalizedPoint(p.x + dx, p.y + dy),
-        ],
-      );
-  }
 }
 
 /// Applies [transform] when there is one, and gets out of the way when

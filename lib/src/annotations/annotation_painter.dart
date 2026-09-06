@@ -4,8 +4,6 @@ import 'dart:ui' show PathMetric;
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
-import '../coordinates/normalized_point.dart';
-import '../coordinates/normalized_rect.dart';
 import '../geometry/image_transform.dart';
 import 'annotation.dart';
 import 'annotation_handles.dart';
@@ -81,28 +79,30 @@ void paintAnnotations(
       case RectangleAnnotation(:final rect, :final rotation):
         _drawRotated(
           canvas,
-          _mapRect(rect, contentRect, transform),
+          mapRectToPixels(rect, contentRect, transform),
           rotation,
           (r) => canvas.drawRect(r, paint),
         );
       case CircleAnnotation(:final rect, :final rotation):
         _drawRotated(
           canvas,
-          _mapRect(rect, contentRect, transform),
+          mapRectToPixels(rect, contentRect, transform),
           rotation,
           (r) => canvas.drawOval(r, paint),
         );
       case ArrowAnnotation(:final start, :final end):
         _paintArrow(
           canvas,
-          _mapOffset(start, contentRect, transform),
-          _mapOffset(end, contentRect, transform),
+          mapPointToPixels(start, contentRect, transform),
+          mapPointToPixels(end, contentRect, transform),
           paint,
         );
       case FreehandAnnotation(:final points):
         _paintFreehand(
           canvas,
-          [for (final p in points) _mapOffset(p, contentRect, transform)],
+          [
+            for (final p in points) mapPointToPixels(p, contentRect, transform),
+          ],
           paint,
         );
     }
@@ -110,7 +110,7 @@ void paintAnnotations(
     if (annotation.id == selectedId) {
       _paintSelection(
         canvas,
-        _mapRect(annotation.bounds, contentRect, transform),
+        mapRectToPixels(annotation.bounds, contentRect, transform),
         paint,
       );
       _paintHandles(canvas, annotation, contentRect, transform);
@@ -118,44 +118,6 @@ void paintAnnotations(
   }
 
   if (transform.cropRect != null) canvas.restore();
-}
-
-/// Projects a normalized point through [transform] into widget space.
-Offset _mapOffset(
-  NormalizedPoint point,
-  Rect contentRect,
-  ImageTransform transform,
-) {
-  final mapped = transform.mapPoint(point);
-  return Offset(
-    contentRect.left + mapped.x * contentRect.width,
-    contentRect.top + mapped.y * contentRect.height,
-  );
-}
-
-/// Projects a normalized rect through [transform].
-///
-/// Built from the mapped corners rather than mapping width and height,
-/// since a 90-degree rotation swaps the axes and would otherwise produce
-/// a rect of the wrong shape. `Rect.fromPoints` re-normalises the corner
-/// order, so a rotation that puts left past right still yields a valid
-/// rect.
-Rect _mapRect(
-  NormalizedRect rect,
-  Rect contentRect,
-  ImageTransform transform,
-) {
-  final a = _mapOffset(
-    NormalizedPoint(rect.left, rect.top),
-    contentRect,
-    transform,
-  );
-  final b = _mapOffset(
-    NormalizedPoint(rect.right, rect.bottom),
-    contentRect,
-    transform,
-  );
-  return Rect.fromPoints(a, b);
 }
 
 /// Draws [mapped] via [draw], rotated by [rotationRadians] about its own
@@ -287,7 +249,7 @@ void _paintHandles(
     ..style = PaintingStyle.stroke;
 
   for (final point in gripsOf(annotation).values) {
-    final at = _mapOffset(point, contentRect, transform);
+    final at = mapPointToPixels(point, contentRect, transform);
     canvas.drawCircle(at, kHandleRadius, fill);
     canvas.drawCircle(at, kHandleRadius, edge);
   }

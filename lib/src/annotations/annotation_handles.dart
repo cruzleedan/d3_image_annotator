@@ -5,6 +5,57 @@ import '../coordinates/normalized_rect.dart';
 import '../geometry/image_transform.dart';
 import 'annotation.dart';
 
+/// Projects a normalized point through [transform] into widget/pixel
+/// space.
+///
+/// Shared by `annotation_painter.dart` (drawing), `hit_testing.dart`
+/// (rotation-aware hit-testing, WORK-0033), and floating shape controls
+/// (WORK-0035) -- consolidated here from three near-identical private
+/// copies, so there is one place this math can be gotten right or wrong,
+/// not three that can silently drift apart.
+Offset mapPointToPixels(
+  NormalizedPoint point,
+  Rect contentRect,
+  ImageTransform transform,
+) {
+  final mapped = transform.mapPoint(point);
+  return Offset(
+    contentRect.left + mapped.x * contentRect.width,
+    contentRect.top + mapped.y * contentRect.height,
+  );
+}
+
+/// Projects a normalized rect through [transform] into widget/pixel
+/// space.
+///
+/// Built from the mapped corners rather than mapping width and height,
+/// since a 90-degree rotation swaps the axes and would otherwise produce
+/// a rect of the wrong shape. `Rect.fromPoints` re-normalises the corner
+/// order, so a rotation that puts left past right still yields a valid
+/// rect.
+///
+/// This is the *unrotated* mapped rect -- for a rotated
+/// `RectangleAnnotation`/`CircleAnnotation`, callers that need the
+/// visual (rotated) extent must rotate this result themselves, the same
+/// way `annotation_painter.dart`'s `_drawRotated` does.
+Rect mapRectToPixels(
+  NormalizedRect rect,
+  Rect contentRect,
+  ImageTransform transform,
+) {
+  final a = mapPointToPixels(
+    NormalizedPoint(rect.left, rect.top),
+    contentRect,
+    transform,
+  );
+  final b = mapPointToPixels(
+    NormalizedPoint(rect.right, rect.bottom),
+    contentRect,
+    transform,
+  );
+  return Rect.fromPoints(a, b);
+}
+
 /// Touch target for a resize handle, in logical pixels.
 ///
 /// Pixels, not normalized units — a finger is the same size whatever the

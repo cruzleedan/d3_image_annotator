@@ -234,3 +234,101 @@ final class FreehandAnnotation extends Annotation {
   @override
   String toString() => 'FreehandAnnotation($id, ${points.length} points)';
 }
+
+/// Translates [annotation] by a normalized delta, or returns null if the
+/// move would push any part of it outside the image.
+///
+/// Refusing the move rather than clamping is deliberate: clamping each
+/// coordinate independently would squash a shape against the edge,
+/// silently changing its size as well as its position. `copyWith`'s
+/// unrelated fields (including `rotation`, where it exists) are left
+/// untouched, since only `rect`/`points`/endpoints are passed here.
+Annotation? translateAnnotation(Annotation annotation, double dx, double dy) {
+  bool inRange(double v) => v >= 0 && v <= 1;
+
+  switch (annotation) {
+    case RectangleAnnotation(:final rect):
+      if (!inRange(rect.left + dx) ||
+          !inRange(rect.right + dx) ||
+          !inRange(rect.top + dy) ||
+          !inRange(rect.bottom + dy)) {
+        return null;
+      }
+      return annotation.copyWith(
+        rect: NormalizedRect(
+          left: rect.left + dx,
+          top: rect.top + dy,
+          right: rect.right + dx,
+          bottom: rect.bottom + dy,
+        ),
+      );
+
+    case CircleAnnotation(:final rect):
+      if (!inRange(rect.left + dx) ||
+          !inRange(rect.right + dx) ||
+          !inRange(rect.top + dy) ||
+          !inRange(rect.bottom + dy)) {
+        return null;
+      }
+      return annotation.copyWith(
+        rect: NormalizedRect(
+          left: rect.left + dx,
+          top: rect.top + dy,
+          right: rect.right + dx,
+          bottom: rect.bottom + dy,
+        ),
+      );
+
+    case ArrowAnnotation(:final start, :final end):
+      if (!inRange(start.x + dx) ||
+          !inRange(end.x + dx) ||
+          !inRange(start.y + dy) ||
+          !inRange(end.y + dy)) {
+        return null;
+      }
+      return annotation.copyWith(
+        start: NormalizedPoint(start.x + dx, start.y + dy),
+        end: NormalizedPoint(end.x + dx, end.y + dy),
+      );
+
+    case FreehandAnnotation(:final points):
+      for (final p in points) {
+        if (!inRange(p.x + dx) || !inRange(p.y + dy)) return null;
+      }
+      return annotation.copyWith(
+        points: [
+          for (final p in points) NormalizedPoint(p.x + dx, p.y + dy),
+        ],
+      );
+  }
+}
+
+/// The normalized offset [duplicateAnnotation] nudges a copy by, so it
+/// does not render exactly under the original and immediately get
+/// selected instead of it (WORK-0035).
+const double kDuplicateOffset = 0.02;
+
+/// Returns a copy of [annotation] with a fresh [newId], nudged by
+/// [kDuplicateOffset] so it is not rendered exactly under the original.
+///
+/// If the nudge would push the copy outside the image (the original was
+/// near an edge), the copy is placed at the original's exact position
+/// instead of being refused outright -- unlike a user's own drag
+/// ([translateAnnotation] returning null there), duplicating is not a
+/// gesture the user can retry with a smaller distance, so silently
+/// failing to duplicate at all would be a worse outcome than two
+/// exactly-overlapping copies the user can immediately drag apart.
+Annotation duplicateAnnotation(Annotation annotation, String newId) {
+  final withId = switch (annotation) {
+    RectangleAnnotation(:final style, :final rect, :final rotation) =>
+      RectangleAnnotation(id: newId, style: style, rect: rect, rotation: rotation),
+    CircleAnnotation(:final style, :final rect, :final rotation) =>
+      CircleAnnotation(id: newId, style: style, rect: rect, rotation: rotation),
+    ArrowAnnotation(:final style, :final start, :final end) =>
+      ArrowAnnotation(id: newId, style: style, start: start, end: end),
+    FreehandAnnotation(:final style, :final points) =>
+      FreehandAnnotation(id: newId, style: style, points: points),
+  };
+  return translateAnnotation(withId, kDuplicateOffset, kDuplicateOffset) ??
+      withId;
+}

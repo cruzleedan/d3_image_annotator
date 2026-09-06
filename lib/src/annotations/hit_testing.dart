@@ -5,6 +5,7 @@ import '../coordinates/coordinate_space.dart';
 import '../coordinates/normalized_point.dart';
 import '../geometry/image_transform.dart';
 import 'annotation.dart';
+import 'annotation_handles.dart';
 
 /// Default touch slop for annotation hit-testing, in widget pixels.
 ///
@@ -82,7 +83,7 @@ NormalizedPoint _unrotatedEquivalent(
   };
   if (rotation == 0.0) return point;
 
-  final mappedRect = _mappedBounds(annotation, contentRect, transform);
+  final mappedRect = mapRectToPixels(annotation.bounds, contentRect, transform);
   final center = mappedRect.center;
 
   // Inverse-rotate the tap around the shape's pixel-space centre --
@@ -99,43 +100,9 @@ NormalizedPoint _unrotatedEquivalent(
   return _toOriginalSpace(localPixel, contentRect, transform);
 }
 
-/// The annotation's bounds, mapped through [transform] into pixel space
-/// -- the same rect `annotation_painter.dart` draws into before rotating
-/// it, so the two agree on where "unrotated" is.
-Rect _mappedBounds(
-  Annotation annotation,
-  Rect contentRect,
-  ImageTransform transform,
-) {
-  final bounds = annotation.bounds;
-  final a = _mapToPixels(
-    NormalizedPoint(bounds.left, bounds.top),
-    contentRect,
-    transform,
-  );
-  final b = _mapToPixels(
-    NormalizedPoint(bounds.right, bounds.bottom),
-    contentRect,
-    transform,
-  );
-  return Rect.fromPoints(a, b);
-}
-
-Offset _mapToPixels(
-  NormalizedPoint point,
-  Rect contentRect,
-  ImageTransform transform,
-) {
-  final mapped = transform.mapPoint(point);
-  return Offset(
-    contentRect.left + mapped.x * contentRect.width,
-    contentRect.top + mapped.y * contentRect.height,
-  );
-}
-
-/// The inverse of [_mapToPixels] followed by [ImageTransform.unmapPoint]
-/// -- pixel space back to the original, pre-transform normalized space
-/// [hitTest] operates in.
+/// The inverse of [mapPointToPixels] followed by
+/// [ImageTransform.unmapPoint] -- pixel space back to the original,
+/// pre-transform normalized space [hitTest] operates in.
 NormalizedPoint _toOriginalSpace(
   Offset pixel,
   Rect contentRect,
