@@ -105,6 +105,111 @@ void main() {
     });
   });
 
+  group('rotation (WORK-0033)', () {
+    // No schema-version bump: the decode path already reads fields
+    // individually rather than checking a full key set, so an optional
+    // field with a defined default is compatible in both directions.
+    // These tests are that guarantee, not just the happy path.
+
+    test('a nonzero rotation survives encode/decode unchanged', () {
+      final rotated = RectangleAnnotation(
+        id: 'r1',
+        style: style,
+        rect: NormalizedRect(left: 0.1, top: 0.2, right: 0.7, bottom: 0.8),
+        rotation: 0.7853981633974483, // pi/4
+      );
+
+      final restored = annotationFromJson(annotationToJson(rotated));
+
+      expect(restored, rotated);
+      expect((restored as RectangleAnnotation).rotation, rotated.rotation);
+    });
+
+    test('a rotated circle survives encode/decode unchanged', () {
+      final rotated = CircleAnnotation(
+        id: 'c1',
+        style: style,
+        rect: NormalizedRect(left: 0, top: 0, right: 1, bottom: 0.5),
+        rotation: -1.2,
+      );
+
+      final restored = annotationFromJson(annotationToJson(rotated));
+
+      expect(restored, rotated);
+      expect((restored as CircleAnnotation).rotation, rotated.rotation);
+    });
+
+    test('a zero rotation is not written to JSON at all', () {
+      // Keeps documents written before rotation existed byte-for-byte
+      // comparable to ones written since, for the common unrotated case.
+      final json = annotationToJson(samples['rectangle']!);
+      expect(json.containsKey('rotation'), isFalse);
+    });
+
+    test('a document with no "rotation" key decodes as zero', () {
+      // Simulates a document written before WORK-0033 -- no rotation
+      // key present at all, not just a zero value.
+      final json = <String, Object?>{
+        'type': 'rectangle',
+        'id': 'r1',
+        'style': {'color': 0xFFFF0000, 'strokeWidth': 0.01, 'filled': false},
+        'rect': {'left': 0.1, 'top': 0.1, 'right': 0.5, 'bottom': 0.5},
+      };
+
+      final restored = annotationFromJson(json) as RectangleAnnotation;
+
+      expect(restored.rotation, 0.0);
+    });
+
+    test('a non-numeric "rotation" throws rather than silently defaulting',
+        () {
+      final json = <String, Object?>{
+        'type': 'circle',
+        'id': 'c1',
+        'style': {'color': 0xFFFF0000, 'strokeWidth': 0.01, 'filled': false},
+        'rect': {'left': 0.0, 'top': 0.0, 'right': 1.0, 'bottom': 1.0},
+        'rotation': 'sideways',
+      };
+
+      expect(
+        () => annotationFromJson(json),
+        throwsA(isA<AnnotationDecodeException>()),
+      );
+    });
+
+    test('copyWith preserves rotation when not explicitly changed', () {
+      final rotated = RectangleAnnotation(
+        id: 'r1',
+        style: style,
+        rect: NormalizedRect(left: 0.1, top: 0.1, right: 0.5, bottom: 0.5),
+        rotation: 0.5,
+      );
+
+      final moved = rotated.copyWith(
+        rect: NormalizedRect(left: 0.2, top: 0.2, right: 0.6, bottom: 0.6),
+      );
+
+      expect(moved.rotation, 0.5,
+          reason: 'moving a rotated shape must not silently reset its '
+              'rotation to zero');
+    });
+
+    test('copyWithStyle preserves rotation', () {
+      final rotated = CircleAnnotation(
+        id: 'c1',
+        style: style,
+        rect: NormalizedRect(left: 0.0, top: 0.0, right: 1.0, bottom: 1.0),
+        rotation: 1.1,
+      );
+
+      final restyled = rotated.copyWithStyle(const AnnotationStyle());
+
+      expect(restyled.rotation, 1.1,
+          reason: 'restyling a rotated shape must not silently reset its '
+              'rotation to zero');
+    });
+  });
+
   group('AnnotationDocument', () {
     test('round-trips a whole document through JSON', () {
       final document = AnnotationDocument(

@@ -188,6 +188,8 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
       widget.controller.annotations,
       point,
       contentRect,
+      pixelPosition: _toImageSpace(localRaw),
+      transform: widget.imageTransform,
     );
     if (hit != null) {
       widget.controller.select(hit.id);
