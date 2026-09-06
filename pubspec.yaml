@@ -23,6 +23,15 @@ dependencies:
     sdk: flutter
   meta: ^1.19.0
 
+  # This package's first third-party dependency (WORK-0030). Used only
+  # to PNG-encode a rendered image off the root isolate for large
+  # outputs -- ui.Image.toByteData has no way to do that itself, and
+  # engine PNG encoding blocks the UI for ~540ms at 12MP
+  # (flutter/flutter#164434, closed with no fix). Below the size where
+  # that fixed isolate cost pays for itself, the engine path is used
+  # instead; see render_annotated_image.dart.
+  image: ^4.3.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
