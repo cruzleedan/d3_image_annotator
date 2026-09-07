@@ -21,6 +21,7 @@ export 'src/annotations/annotation.dart';
 export 'src/annotations/annotation_binding.dart';
 export 'src/annotations/annotation_codec.dart';
 export 'src/annotations/annotation_controller.dart';
+export 'src/annotations/annotation_editing_session.dart';
 export 'src/annotations/annotation_handles.dart';
 export 'src/annotations/annotation_interaction_state.dart';
 export 'src/annotations/annotation_overlay_widget.dart';

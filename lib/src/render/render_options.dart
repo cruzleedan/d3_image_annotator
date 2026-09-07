@@ -24,8 +24,23 @@ class RenderOptions {
          'maxDimension must be positive, or null for full resolution',
        );
 
+  /// Unbounded output at the source image's own resolution -- equivalent
+  /// to `RenderOptions(maxDimension: null)`, spelled out as a named
+  /// option so "I want the real thing, not a report thumbnail" reads at
+  /// the call site rather than requiring a caller to already know that
+  /// passing `null` is what asks for it (WORK-0038).
+  ///
+  /// Reach for this for a user-initiated "download/export my annotated
+  /// image" action, as distinct from generating a lightweight
+  /// attachment for a report -- the two are different intents even
+  /// though both call `renderAnnotatedImage`. See [maxDimension]'s own
+  /// doc comment for why 2000px is the right default for the report
+  /// case specifically, not for this one.
+  static const RenderOptions original = RenderOptions(maxDimension: null);
+
   /// Longest side of the output, in pixels. Null renders at full
-  /// resolution.
+  /// resolution -- see [RenderOptions.original] for a named way to ask
+  /// for that explicitly.
   ///
   /// **Bounded by default, deliberately.** Site Inspector hit real
   /// memory trouble producing unbounded full-resolution copies

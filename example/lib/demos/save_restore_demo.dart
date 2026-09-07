@@ -62,25 +62,33 @@ class _SaveRestoreDemoState extends State<SaveRestoreDemo> {
     });
   }
 
-  void _restore() {
+  Future<void> _restore() async {
     final saved = _savedJson;
-    if (saved == null) return;
+    final bytes = _bytes;
+    if (saved == null || bytes == null) return;
     final document = AnnotationDocument.fromJson(
       jsonDecode(saved) as Map<String, Object?>,
     );
 
-    // The check every caller should make before rendering a restored
-    // document: does it still match the image it is about to sit on?
-    // Here it does, since we are restoring against the same test image
-    // -- the mismatch button below shows the other branch.
-    final binding = classifyBinding(document, testImageSize);
+    // AnnotationEditingSession.fromDocument (WORK-0038) collapses what
+    // used to be here as three separate manual steps -- decode the
+    // image a second time purely to learn canvasSize, build a fresh
+    // AnnotationController from document.annotations, and separately
+    // call classifyBinding against that same decoded size -- into one
+    // awaited call. It happens to already know the binding result
+    // (decoding the image is exactly what classifyBinding also needs),
+    // so this demo's own mismatch check below reuses that instead of
+    // decoding a third time.
+    final session = await AnnotationEditingSession.fromDocument(
+      document,
+      bytes,
+    );
+    if (!mounted) return;
 
     setState(() {
       _restoredController?.dispose();
-      _restoredController = AnnotationController(
-        initial: document.annotations,
-      );
-      _mismatchResult = binding;
+      _restoredController = session.controller;
+      _mismatchResult = session.binding;
     });
   }
 
@@ -127,10 +135,36 @@ class _SaveRestoreDemoState extends State<SaveRestoreDemo> {
                                     'see it appear here, in a brand new '
                                     'controller',
                               )
-                            : _EditorPane(
-                                title: 'Restored',
-                                controller: _restoredController!,
-                                bytes: bytes,
+                            : Column(
+                                children: [
+                                  // A worked response to classifyBinding's
+                                  // result (WORK-0038), not just the raw
+                                  // enum value: a mismatch is advisory,
+                                  // per AnnotationBinding's own doc
+                                  // comment, so this warns rather than
+                                  // blocking -- the marks still render
+                                  // (wherever normalized coordinates land
+                                  // on an image of a different size), and
+                                  // the user decides whether that's
+                                  // corruption or intentional
+                                  // re-association.
+                                  if (_mismatchResult ==
+                                      AnnotationBinding.sizeMismatch)
+                                    const _BindingWarningBanner(
+                                      message:
+                                          'These annotations were saved '
+                                          'against a differently-sized '
+                                          'image. Marks may not line up '
+                                          'with what you see below.',
+                                    ),
+                                  Expanded(
+                                    child: _EditorPane(
+                                      title: 'Restored',
+                                      controller: _restoredController!,
+                                      bytes: bytes,
+                                    ),
+                                  ),
+                                ],
                               ),
                       ),
                     ],
@@ -237,6 +271,39 @@ class _EmptyPane extends StatelessWidget {
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodyMedium,
         ),
+      ),
+    );
+  }
+}
+
+/// One worked response to [AnnotationBinding.sizeMismatch] (WORK-0038):
+/// a warning banner, not a block. `classifyBinding` is advisory by
+/// design -- nothing in `d3_image_annotator` itself decides whether a
+/// mismatch is corruption or a deliberate re-association, so this demo
+/// picks one reasonable answer (warn, then still render) rather than
+/// leaving every consumer to invent a response from the enum alone.
+class _BindingWarningBanner extends StatelessWidget {
+  const _BindingWarningBanner({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: Colors.amber.shade900,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber, size: 18, color: Colors.white),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
+          ),
+        ],
       ),
     );
   }
