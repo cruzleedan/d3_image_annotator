@@ -415,6 +415,20 @@ const List<Color?> kRestyleTextBackgrounds = [
   Color(0x99FFFFFF),
 ];
 
+/// Border widths [D3RestyleBar] offers for [TextAnnotation]s, as
+/// fractions of the image's shorter side -- see
+/// [AnnotationStyle.borderWidth]. The first entry (0) is "no border",
+/// [AnnotationStyle]'s own default -- the same "zero is off" convention
+/// [AnnotationStyle.borderWidth] itself uses, rather than a separate
+/// visibility toggle.
+const List<double> kRestyleBorderWidths = [0.0, 0.0025, 0.005, 0.01];
+
+/// Border-radius choices [D3RestyleBar] offers for [TextAnnotation]s, as
+/// fractions of the image's shorter side -- see
+/// [AnnotationStyle.borderRadius]. The first entry (0) is a square
+/// corner.
+const List<double> kRestyleBorderRadii = [0.0, 0.008, 0.02];
+
 /// Colour, stroke-width, and fill controls for the selected annotation
 /// (WORK-0035).
 ///
@@ -512,6 +526,29 @@ class D3RestyleBar extends StatelessWidget {
                               : style.copyWith(backgroundColor: background),
                         ),
                       ),
+                    const _GroupDivider(),
+                    for (final borderWidth in kRestyleBorderWidths)
+                      _BorderWidthSwatch(
+                        borderWidth: borderWidth,
+                        selected: style.borderWidth == borderWidth,
+                        onTap: () =>
+                            _apply(style.copyWith(borderWidth: borderWidth)),
+                      ),
+                    // Meaningless while there is no border to round --
+                    // shown only once one is chosen, the same
+                    // conditional-on-a-prerequisite pattern _supportsFill
+                    // already uses for its own group below.
+                    if (style.borderWidth > 0) ...[
+                      const _GroupDivider(),
+                      for (final borderRadius in kRestyleBorderRadii)
+                        _BorderRadiusSwatch(
+                          borderRadius: borderRadius,
+                          selected: style.borderRadius == borderRadius,
+                          onTap: () => _apply(
+                            style.copyWith(borderRadius: borderRadius),
+                          ),
+                        ),
+                    ],
                   ] else ...[
                     const _GroupDivider(),
                     for (final width in kRestyleStrokeWidths)
@@ -761,6 +798,79 @@ class _FontSizeSwatch extends StatelessWidget {
           height: 1,
           fontWeight: FontWeight.w600,
           color: selected ? Colors.amber : Colors.white70,
+        ),
+      ),
+    );
+  }
+}
+
+/// One border-width choice for a [TextAnnotation]'s box (see
+/// `AnnotationStyle.borderWidth`'s own doc comment for why this exists):
+/// a square outline drawn at its actual relative weight, or a slashed
+/// square for zero -- "no border" reads as a deliberate option, not a
+/// missing one, the same convention [_TextBackgroundSwatch] already
+/// uses for "no background".
+class _BorderWidthSwatch extends StatelessWidget {
+  const _BorderWidthSwatch({
+    required this.borderWidth,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final double borderWidth;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? Colors.amber : Colors.white70;
+    return _IconSwatch(
+      selected: selected,
+      onTap: onTap,
+      label: 'Border width',
+      child: borderWidth <= 0
+          ? Icon(Icons.block, color: color, size: 16)
+          : Container(
+              width: 20,
+              height: 20,
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: color,
+                  width: (borderWidth * 800).clamp(1.0, 6.0),
+                ),
+              ),
+            ),
+    );
+  }
+}
+
+/// One border-radius choice for a [TextAnnotation]'s box: a square
+/// drawn with its actual corner rounding, the same "show, don't make
+/// the user compare numbers" reasoning as [_StrokeWidthSwatch].
+class _BorderRadiusSwatch extends StatelessWidget {
+  const _BorderRadiusSwatch({
+    required this.borderRadius,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final double borderRadius;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? Colors.amber : Colors.white70;
+    return _IconSwatch(
+      selected: selected,
+      onTap: onTap,
+      label: 'Border radius',
+      child: Container(
+        width: 20,
+        height: 20,
+        decoration: BoxDecoration(
+          border: Border.all(color: color, width: 2),
+          borderRadius: BorderRadius.circular((borderRadius * 500).clamp(0.0, 10.0)),
         ),
       ),
     );

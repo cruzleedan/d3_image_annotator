@@ -8,6 +8,7 @@ import '../geometry/image_transform.dart';
 import '../geometry/transformed_image_paint.dart';
 import 'annotation.dart';
 import 'annotation_handles.dart';
+import 'annotation_style.dart';
 import 'image_annotation_cache.dart';
 
 /// Renders annotations onto a canvas.
@@ -256,15 +257,47 @@ void _paintText(
   Rect bounds,
   double shorterSidePixels,
 ) {
-  if (text.style.backgroundColor case final bg?) {
-    canvas.drawRect(bounds, Paint()..color = bg);
-  }
-
   // The exact same font-size resolution `textBoundsInPixels` used to
   // measure [bounds] -- painting at any other size here would drift
   // from the box the rest of the pipeline (hit-testing, handles,
   // selection outline) already agreed this text occupies.
   final fontSizePixels = text.style.resolveFontSize(shorterSidePixels);
+  // [bounds] already includes the textfield-like padding
+  // `textBoundsInPixels` adds around the glyphs -- a border/background
+  // drawn at [bounds] itself sits at that outer, padded edge, and the
+  // glyphs below are inset back in by the same amount so they land
+  // exactly where they were measured, not flush against the border.
+  final padding = textBoxPaddingInPixels(fontSizePixels);
+
+  if (text.style.backgroundColor case final bg?) {
+    _drawTextBoxShape(
+      canvas,
+      bounds,
+      text.style,
+      shorterSidePixels,
+      Paint()..color = bg,
+    );
+  }
+
+  final borderWidthPixels = text.style.resolveBorderWidth(shorterSidePixels);
+  if (borderWidthPixels > 0) {
+    final borderPaint = Paint()
+      ..color = text.style.color
+      ..strokeWidth = borderWidthPixels
+      ..style = PaintingStyle.stroke;
+    // Inset by half the stroke width, the same convention every other
+    // stroked shape in this package follows, so the border's outer
+    // edge -- not its centreline -- lands exactly on [bounds], matching
+    // the selection outline drawn around the same rect.
+    _drawTextBoxShape(
+      canvas,
+      bounds.deflate(borderWidthPixels / 2),
+      text.style,
+      shorterSidePixels,
+      borderPaint,
+    );
+  }
+
   final painter = TextPainter(
     text: TextSpan(
       text: text.text,
@@ -272,7 +305,26 @@ void _paintText(
     ),
     textDirection: TextDirection.ltr,
   )..layout();
-  painter.paint(canvas, bounds.topLeft);
+  painter.paint(canvas, bounds.topLeft + Offset(padding, padding));
+}
+
+/// Draws [bounds] as a plain rect, or a rounded one when
+/// [AnnotationStyle.borderRadius] is set -- shared by the background
+/// fill and the border outline so the two always agree on the box's
+/// shape.
+void _drawTextBoxShape(
+  Canvas canvas,
+  Rect bounds,
+  AnnotationStyle style,
+  double shorterSidePixels,
+  Paint paint,
+) {
+  final radius = style.resolveBorderRadius(shorterSidePixels);
+  if (radius <= 0) {
+    canvas.drawRect(bounds, paint);
+  } else {
+    canvas.drawRRect(RRect.fromRectAndRadius(bounds, Radius.circular(radius)), paint);
+  }
 }
 
 /// Draws [annotation]'s decoded image into [bounds] via its own

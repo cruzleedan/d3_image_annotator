@@ -713,4 +713,60 @@ void main() {
       );
     }
   });
+
+  group('text box padding (textfield-like inset around the glyphs)', () {
+    const text = TextAnnotation(
+      id: 't',
+      style: AnnotationStyle(fontSize: 0.05),
+      position: NormalizedPoint(0.4, 0.45),
+      text: 'hi',
+    );
+
+    test('textBoundsInPixels inflates around the measured glyph box, not '
+        'flush with it', () {
+      final fontSizePixels =
+          text.style.resolveFontSize(shorterSidePixels(contentRect, ImageTransform.identity));
+      final expectedPadding = textBoxPaddingInPixels(fontSizePixels);
+
+      final topLeft = mapPointToPixels(text.position, contentRect, ImageTransform.identity);
+      final bounds = textBoundsInPixels(text, contentRect, ImageTransform.identity);
+
+      expect(bounds.left, closeTo(topLeft.dx - expectedPadding, 1e-6));
+      expect(bounds.top, closeTo(topLeft.dy - expectedPadding, 1e-6));
+    });
+
+    test(
+      'corner-drag resize keeps the opposite corner fixed on an unrotated '
+      'text annotation too, not only rotated ones',
+      () {
+        // The bug this guards against: the padded box's top-left and
+        // TextAnnotation.position's own (unpadded) anchor point are two
+        // different pixels once padding exists, and resize math that
+        // conflates them drifts the anchor corner by exactly the
+        // padding amount -- caught once already by the rotated-text
+        // tests above; this is the same check at zero rotation, where
+        // the bug would be just as real but easy to miss since an
+        // unrotated box's top-left corner IS the anchor for a
+        // bottomRight drag regardless.
+        final positions = gripPositionsInPixels(text, contentRect, ImageTransform.identity);
+        final anchorBefore = positions[AnnotationGrip.topLeft]!;
+        final draggedBefore = positions[AnnotationGrip.bottomRight]!;
+        final target = anchorBefore + (draggedBefore - anchorBefore) * 1.4;
+
+        final resized = resizeRotatedAnnotation(
+          text,
+          AnnotationGrip.bottomRight,
+          target,
+          contentRect,
+          ImageTransform.identity,
+        )! as TextAnnotation;
+
+        final after = gripPositionsInPixels(resized, contentRect, ImageTransform.identity);
+        expect(
+          (after[AnnotationGrip.topLeft]! - anchorBefore).distance,
+          lessThan(1e-6),
+        );
+      },
+    );
+  });
 }
