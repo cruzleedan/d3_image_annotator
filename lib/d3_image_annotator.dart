@@ -22,6 +22,7 @@ export 'src/annotations/annotation_binding.dart';
 export 'src/annotations/annotation_codec.dart';
 export 'src/annotations/annotation_controller.dart';
 export 'src/annotations/annotation_handles.dart';
+export 'src/annotations/annotation_interaction_state.dart';
 export 'src/annotations/annotation_overlay_widget.dart';
 export 'src/annotations/annotation_painter.dart';
 export 'src/annotations/annotation_style.dart';
