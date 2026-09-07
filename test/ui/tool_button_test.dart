@@ -478,6 +478,51 @@ void main() {
       expect(controller.annotations.single.style.filled, isFalse);
     });
 
+    testWidgets(
+      'stroke-width and font-size controls are visually grouped, not one '
+      'undifferentiated row of same-looking dots',
+      (tester) async {
+        // Regression test for a real bug found on-device: the restyle
+        // bar's colour swatches and its stroke-width/font-size controls
+        // looked identical (plain circles), with no visual grouping to
+        // tell a first-time user "these five are colours, these three
+        // are something else" -- reported as "not user friendly
+        // especially [for] those using the app the first time".
+        await pumpRestyle(tester, rect());
+        expect(find.byType(VerticalDivider), findsWidgets);
+      },
+    );
+
+    testWidgets(
+      'each stroke-width swatch renders at a visually distinct weight',
+      (tester) async {
+        await pumpRestyle(tester, rect());
+
+        final weights = kRestyleStrokeWidths
+            .map(
+              (_) => find
+                  .descendant(
+                    of: find.bySemanticsLabel('Stroke width'),
+                    matching: find.byType(Container),
+                  )
+                  .evaluate()
+                  .toList(),
+            )
+            .toList();
+        final sizes = <double>{};
+        for (final elements in weights) {
+          for (final element in elements) {
+            final box = element.renderObject as RenderBox?;
+            if (box != null && box.hasSize) sizes.add(box.size.height);
+          }
+        }
+        expect(sizes.length, greaterThan(1),
+            reason: 'different stroke widths must look visually distinct, '
+                'not same-sized dots differing only by an arbitrary '
+                'colour');
+      },
+    );
+
     testWidgets('tapping a stroke-width swatch changes strokeWidth, undoably', (
       tester,
     ) async {

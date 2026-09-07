@@ -320,6 +320,11 @@ class D3HistoryBar extends StatelessWidget {
 /// icon sitting directly on a small selected shape has no room for a
 /// label either, and the same "obvious from the icon alone" reasoning
 /// applies to a × or a +1.
+///
+/// The icon sits on a translucent dark disc, not directly on whatever is
+/// behind it -- found necessary on-device: a white icon (the default
+/// duplicate color) drawn straight onto a light or white photo was all
+/// but invisible with no backdrop of its own.
 class D3FloatingButton extends StatelessWidget {
   const D3FloatingButton({
     super.key,
@@ -351,10 +356,24 @@ class D3FloatingButton extends StatelessWidget {
               minWidth: kMinimumTouchTarget,
               minHeight: kMinimumTouchTarget,
             ),
-            child: Icon(
-              icon,
-              color: onPressed == null ? Colors.white24 : color,
-              size: 22,
+            child: Center(
+              child: SizedBox(
+                width: kMinimumTouchTarget * 0.6,
+                height: kMinimumTouchTarget * 0.6,
+                child: DecoratedBox(
+                  decoration: const BoxDecoration(
+                    color: Color(0x99000000),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Center(
+                    child: Icon(
+                      icon,
+                      color: onPressed == null ? Colors.white24 : color,
+                      size: 22,
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
         ),
@@ -471,17 +490,16 @@ class D3RestyleBar extends StatelessWidget {
                       selected: style.color.toARGB32() == color.toARGB32(),
                       onTap: () => _apply(style.copyWith(color: color)),
                     ),
-                  const SizedBox(width: 8),
                   if (_isText) ...[
+                    const _GroupDivider(),
                     for (final fontSize in kRestyleFontSizes)
-                      _SizeSwatch(
-                        value: fontSize,
-                        label: 'Font size',
+                      _FontSizeSwatch(
+                        fontSize: fontSize,
                         selected: style.fontSize == fontSize,
                         onTap: () =>
                             _apply(style.copyWith(fontSize: fontSize)),
                       ),
-                    const SizedBox(width: 8),
+                    const _GroupDivider(),
                     for (final background in kRestyleTextBackgrounds)
                       _TextBackgroundSwatch(
                         color: background,
@@ -495,16 +513,16 @@ class D3RestyleBar extends StatelessWidget {
                         ),
                       ),
                   ] else ...[
+                    const _GroupDivider(),
                     for (final width in kRestyleStrokeWidths)
-                      _SizeSwatch(
-                        value: width,
-                        label: 'Stroke width',
+                      _StrokeWidthSwatch(
+                        strokeWidth: width,
                         selected: style.strokeWidth == width,
                         onTap: () =>
                             _apply(style.copyWith(strokeWidth: width)),
                       ),
                     if (_supportsFill) ...[
-                      const SizedBox(width: 8),
+                      const _GroupDivider(),
                       _FillToggle(
                         filled: style.filled,
                         onTap: () =>
@@ -599,50 +617,150 @@ class _ColorSwatch extends StatelessWidget {
   }
 }
 
-/// A dot-sized-by-value swatch, shared by stroke width and (WORK-0034)
-/// font size -- both are "pick one of a few relative sizes" controls
-/// differing only in [label] and which `AnnotationStyle` field they set.
-class _SizeSwatch extends StatelessWidget {
-  const _SizeSwatch({
-    required this.value,
-    required this.selected,
-    required this.onTap,
-    required this.label,
-  });
-
-  final double value;
-  final bool selected;
-  final VoidCallback onTap;
-  final String label;
+/// A thin vertical rule separating one control group from the next (e.g.
+/// colour from stroke width, stroke width from fill) -- found necessary
+/// on-device (bug report during WORK-0037 functional testing): an
+/// undifferentiated row of same-sized dots gave a first-time user no way
+/// to tell "these five are colours" from "these three are something
+/// else" without trial and error. Purely visual, so it carries no
+/// semantics of its own.
+class _GroupDivider extends StatelessWidget {
+  const _GroupDivider();
 
   @override
   Widget build(BuildContext context) {
-    // Dot size communicates relative weight directly, rather than
-    // making the user compare numbers they cannot see the effect of.
-    final dotSize = 6 + value * 800;
+    return const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 4, vertical: 12),
+      child: VerticalDivider(width: 1, color: Colors.white24),
+    );
+  }
+}
+
+/// Shared look for a selectable icon-based swatch: an outlined circle
+/// that fills solid and gains an amber ring when selected, framing
+/// [child] (a weight-scaled line, an "A" glyph, or the like). Replaces
+/// the earlier bare, uniformly-coloured dot -- amber/white70 read as an
+/// arbitrary colour choice unrelated to the actual colour swatches
+/// above them, not as "selected" (found on-device, same report as
+/// [_GroupDivider]'s).
+class _IconSwatch extends StatelessWidget {
+  const _IconSwatch({
+    required this.selected,
+    required this.onTap,
+    required this.label,
+    required this.child,
+  });
+
+  final bool selected;
+  final VoidCallback onTap;
+  final String label;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
     return Semantics(
       button: true,
       selected: selected,
       label: label,
       excludeSemantics: true,
-      child: InkWell(
-        onTap: onTap,
-        customBorder: const CircleBorder(),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(
-            minWidth: kMinimumTouchTarget,
-            minHeight: kMinimumTouchTarget,
-          ),
-          child: Center(
-            child: Container(
-              width: dotSize,
-              height: dotSize,
-              decoration: BoxDecoration(
-                color: selected ? Colors.amber : Colors.white70,
-                shape: BoxShape.circle,
+      child: Tooltip(
+        message: label,
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              minWidth: kMinimumTouchTarget,
+              minHeight: kMinimumTouchTarget,
+            ),
+            child: Center(
+              child: SizedBox(
+                width: 32,
+                height: 32,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? Colors.amber.withValues(alpha: 0.25)
+                        : Colors.transparent,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: selected ? Colors.amber : Colors.white38,
+                      width: selected ? 2 : 1,
+                    ),
+                  ),
+                  child: Center(child: child),
+                ),
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One stroke-width choice: a horizontal line drawn at its actual
+/// relative weight, so the effect is legible at a glance rather than an
+/// abstract dot size the user must learn to compare -- self-evident the
+/// way a word processor's line-weight picker is, addressing the same
+/// on-device report as [_GroupDivider]'s ("not user friendly especially
+/// [for] those using the app the first time").
+class _StrokeWidthSwatch extends StatelessWidget {
+  const _StrokeWidthSwatch({
+    required this.strokeWidth,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final double strokeWidth;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _IconSwatch(
+      selected: selected,
+      onTap: onTap,
+      label: 'Stroke width',
+      child: Container(
+        width: 18,
+        height: (strokeWidth * 800).clamp(2.0, 10.0),
+        decoration: BoxDecoration(
+          color: selected ? Colors.amber : Colors.white70,
+          borderRadius: BorderRadius.circular(4),
+        ),
+      ),
+    );
+  }
+}
+
+/// One font-size choice: a capital "A" drawn at a size proportional to
+/// the actual choice, the same "show, don't make the user compare
+/// numbers" reasoning as [_StrokeWidthSwatch].
+class _FontSizeSwatch extends StatelessWidget {
+  const _FontSizeSwatch({
+    required this.fontSize,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final double fontSize;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _IconSwatch(
+      selected: selected,
+      onTap: onTap,
+      label: 'Font size',
+      child: Text(
+        'A',
+        style: TextStyle(
+          fontSize: 10 + fontSize * 250,
+          height: 1,
+          fontWeight: FontWeight.w600,
+          color: selected ? Colors.amber : Colors.white70,
         ),
       ),
     );
@@ -662,18 +780,21 @@ class _FillToggle extends StatelessWidget {
       selected: filled,
       label: 'Fill',
       excludeSemantics: true,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(
-            minWidth: kMinimumTouchTarget,
-            minHeight: kMinimumTouchTarget,
-          ),
-          child: Icon(
-            filled ? Icons.square : Icons.square_outlined,
-            color: filled ? Colors.amber : Colors.white70,
-            size: 22,
+      child: Tooltip(
+        message: filled ? 'Filled' : 'Outline only',
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              minWidth: kMinimumTouchTarget,
+              minHeight: kMinimumTouchTarget,
+            ),
+            child: Icon(
+              filled ? Icons.square : Icons.square_outlined,
+              color: filled ? Colors.amber : Colors.white70,
+              size: 22,
+            ),
           ),
         ),
       ),
