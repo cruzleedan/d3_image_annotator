@@ -39,6 +39,7 @@ class D3AnnotatorScreen extends StatefulWidget {
     this.onClose,
     this.onDone,
     this.doneLabel = 'Done',
+    this.closeIcon = Icons.close,
     this.fit = ImageFit.contain,
     this.backgroundColor = Colors.black,
     this.initialTool = AnnotationTool.rectangle,
@@ -75,6 +76,16 @@ class D3AnnotatorScreen extends StatefulWidget {
   final VoidCallback? onDone;
 
   final String doneLabel;
+
+  /// The close button's icon. Defaults to [Icons.close], unchanged from
+  /// before this parameter existed.
+  ///
+  /// A host that also shows [onDone] (a save-and-exit affordance) may
+  /// want this button to read as "discard and go back" rather than a
+  /// generic "close" — e.g. [Icons.arrow_back] — since Done already
+  /// covers the exit-with-changes-applied case. This does not change
+  /// [onClose]'s behaviour, only the glyph.
+  final IconData closeIcon;
   final ImageFit fit;
   final Color backgroundColor;
   final AnnotationTool initialTool;
@@ -175,6 +186,7 @@ class _D3AnnotatorScreenState extends State<D3AnnotatorScreen> {
                 onClose: _close,
                 onDone: widget.onDone,
                 doneLabel: widget.doneLabel,
+                closeIcon: widget.closeIcon,
               ),
             ),
             Expanded(
@@ -297,6 +309,7 @@ class _TopBar extends StatelessWidget {
     required this.onClose,
     required this.onDone,
     required this.doneLabel,
+    required this.closeIcon,
   });
 
   final AnnotationController controller;
@@ -304,12 +317,13 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onClose;
   final VoidCallback? onDone;
   final String doneLabel;
+  final IconData closeIcon;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
-        D3CloseButton(onPressed: onClose),
+        D3CloseButton(onPressed: onClose, icon: closeIcon),
         const Spacer(),
         D3HistoryBar(controller: controller),
         // Disabled at 1x, so it reads as "nothing to reset" rather than

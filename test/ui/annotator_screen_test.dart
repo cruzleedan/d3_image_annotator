@@ -22,6 +22,7 @@ void main() {
     AnnotationController? controller,
     Set<AnnotationTool>? visibleTools,
     AnnotationTool initialTool = AnnotationTool.rectangle,
+    IconData closeIcon = Icons.close,
   }) async {
     tester.view.physicalSize = const Size(1000, 1600);
     tester.view.devicePixelRatio = 1.0;
@@ -45,6 +46,7 @@ void main() {
           onDone: onDone,
           visibleTools: visibleTools,
           initialTool: initialTool,
+          closeIcon: closeIcon,
         ),
       ),
     );
@@ -70,6 +72,26 @@ void main() {
       expect(find.text('Select'), findsNothing);
       expect(find.text('Draw'), findsWidgets);
       expect(find.text('Adjust'), findsOneWidget);
+    });
+
+    testWidgets('closeIcon overrides the default close glyph', (tester) async {
+      await pumpScreen(tester, closeIcon: Icons.arrow_back);
+
+      expect(find.byIcon(Icons.arrow_back), findsOneWidget);
+      expect(find.byIcon(Icons.close), findsNothing);
+    });
+
+    testWidgets('closeIcon still reports to onClose like the default icon '
+        'does', (tester) async {
+      var closed = false;
+      await pumpScreen(
+        tester,
+        closeIcon: Icons.arrow_back,
+        onClose: () => closed = true,
+      );
+
+      await tester.tap(find.byIcon(Icons.arrow_back));
+      expect(closed, isTrue);
     });
 
     testWidgets('owns no Scaffold or AppBar, so a host keeps its own', (
