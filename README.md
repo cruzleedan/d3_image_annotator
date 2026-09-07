@@ -192,9 +192,12 @@ the burned-in export. One rendering path means the two cannot drift.
 
 ## Status
 
-Model, controller, painter, hit-testing, overlay, the zoomable viewer,
-and JSON serialization are implemented, with 75 tests. Rendering an
-annotated image to a file is not built yet, nor are crop/rotate/mirror.
+Rectangle, circle, arrow, freehand, text, and image annotations are all
+implemented, with per-shape rotation, corner-drag resize, a blank-canvas
+mode for sketching without a photo, and JSON serialization — model,
+controller, painter, hit-testing, overlay, the zoomable viewer, and
+rendering to a flattened PNG are all in place, with 350+ tests.
 
-Text and highlight annotations are deliberately deferred — text drags in
-IME and font-metrics work that is its own problem.
+See `example/` for a tour of every mode: the full editor, a blank
+canvas, an image placed as its own annotation, composing the bare
+viewer into your own UI, and a save/restore round-trip.
