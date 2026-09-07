@@ -781,6 +781,37 @@ void main() {
     );
 
     testWidgets(
+      'a plain tap on a text annotation not yet selected opens editing '
+      'directly, not just selection',
+      (tester) async {
+        // Deliberate: a plain tap always means "type", regardless of
+        // whether this is the first tap or a later one -- unlike every
+        // other type, where a first tap only selects and a body drag is
+        // what moves it. See _onPanStart's own comment on this.
+        const existing = TextAnnotation(
+          id: 'target',
+          style: AnnotationStyle(),
+          position: NormalizedPoint(0.3, 0.3),
+          text: 'original',
+        );
+        final controller = AnnotationController()..add(existing);
+        await pumpOverlay(
+          tester,
+          tool: AnnotationTool.rectangle,
+          controller: controller,
+        );
+        expect(controller.selectedId, isNull);
+
+        await tester.tapAt(at(0.365, 0.309));
+        await tester.pump();
+
+        expect(controller.selectedId, 'target');
+        final field = tester.widget<TextField>(find.byType(TextField));
+        expect(field.controller?.text, 'original');
+      },
+    );
+
+    testWidgets(
       'tapping an already-selected text annotation re-opens the field '
       'pre-filled with its current text',
       (tester) async {
@@ -803,6 +834,85 @@ void main() {
 
         final field = tester.widget<TextField>(find.byType(TextField));
         expect(field.controller?.text, 'original');
+      },
+    );
+
+    testWidgets(
+      'dragging an already-selected text annotation moves it instead of '
+      'opening the keyboard',
+      (tester) async {
+        // Regression test for a real bug found on-device, once text
+        // rendered as a visible bordered box: dragging a selected text
+        // annotation did nothing but focus the field and pop the
+        // keyboard, the same as a plain tap -- there was no way to
+        // move it at all. A drag that clears kTouchSlop must move the
+        // text, exactly like every other selected annotation type;
+        // only a drag that never clears it (the test above) should
+        // open editing.
+        const existing = TextAnnotation(
+          id: 'target',
+          style: AnnotationStyle(),
+          position: NormalizedPoint(0.3, 0.3),
+          text: 'original',
+        );
+        // Deliberately not pre-selected: a drag must move the text
+        // whether this is the very first touch or a later one, the
+        // same "no distinction based on prior selection" decision the
+        // plain-tap case makes.
+        final controller = AnnotationController()..add(existing);
+        await pumpOverlay(
+          tester,
+          tool: AnnotationTool.rectangle,
+          controller: controller,
+        );
+
+        // Comfortably past kTouchSlop's 18 logical pixels -- 0.1
+        // normalized is 50px in this file's 500px-wide content rect.
+        await tester.dragFrom(at(0.365, 0.309), at(0.465, 0.409) - at(0.365, 0.309));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(TextField), findsNothing,
+            reason: 'a real drag must not open the edit field');
+        expect(controller.selectedId, 'target');
+        final moved = controller.annotations.single as TextAnnotation;
+        expect(moved.position.x, greaterThan(existing.position.x));
+        expect(moved.position.y, greaterThan(existing.position.y));
+        expect(moved.text, 'original', reason: 'moving must not touch the text');
+      },
+    );
+
+    testWidgets(
+      'jitter under kTouchSlop before release still opens editing, and '
+      'leaves the text exactly where it was',
+      (tester) async {
+        // A finger is rarely perfectly still; a real tap almost always
+        // carries a pixel or two of jitter. That must still resolve to
+        // "tap to edit", and -- since _onPanUpdate defers translating
+        // the text at all until slop actually clears -- must not leave
+        // the text nudged by the jitter amount first.
+        const existing = TextAnnotation(
+          id: 'target',
+          style: AnnotationStyle(),
+          position: NormalizedPoint(0.3, 0.3),
+          text: 'original',
+        );
+        final controller = AnnotationController()..add(existing);
+        controller.select('target');
+        await pumpOverlay(
+          tester,
+          tool: AnnotationTool.rectangle,
+          controller: controller,
+        );
+
+        final gesture = await tester.startGesture(at(0.365, 0.309));
+        await gesture.moveBy(const Offset(4, 3)); // well under 18px slop
+        await gesture.up();
+        await tester.pumpAndSettle();
+
+        expect(find.byType(TextField), findsOneWidget,
+            reason: 'sub-slop jitter is still a tap, not a drag');
+        expect(controller.annotations.single, existing,
+            reason: 'jitter must not have nudged the text at all');
       },
     );
 

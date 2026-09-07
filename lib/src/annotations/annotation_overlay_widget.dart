@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart' show kTouchSlop;
 import 'package:flutter/material.dart';
 
 import '../coordinates/coordinate_space.dart';
@@ -106,6 +107,28 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
   String? _movingId;
   Annotation? _movingOriginal;
   NormalizedPoint? _moveAnchor;
+
+  /// Pixel-space start of the current move drag, or null when not
+  /// moving a [TextAnnotation] specifically.
+  ///
+  /// Only tracked for text: every other type treats "tap it while
+  /// selected" and "drag it while selected" the same way (both move
+  /// it -- a stationary "drag" of zero distance is simply a no-op
+  /// translate), so they need no such distinction. Text cannot reuse
+  /// that: tapping an already-selected text annotation must *edit* it,
+  /// not silently no-op, so this gesture has to stay ambiguous between
+  /// "tap to edit" and "drag to move" until it is clear which one the
+  /// finger actually did -- resolved in [_onPanEnd] by comparing total
+  /// pixel displacement against [kTouchSlop], the same threshold
+  /// Flutter's own tap/drag recognizers use for exactly this
+  /// distinction.
+  Offset? _movingTextStartPixel;
+
+  /// The most recent raw pixel position seen while [_movingTextStartPixel]
+  /// is set -- `ScaleEndDetails` carries no position of its own, only
+  /// velocity, so this is what [_onPanEnd] actually compares against the
+  /// start to measure the gesture's total displacement.
+  Offset? _movingTextLastPixel;
 
   /// Set when a drag grabbed a resize handle rather than the shape body.
   AnnotationGrip? _grip;
@@ -237,21 +260,23 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
       transform: widget.imageTransform,
     );
     if (hit != null) {
-      // Tapping an already-selected TextAnnotation again re-opens the
-      // text field pre-filled with its current content (WORK-0034),
-      // rather than starting a move drag the way every other type's
-      // second tap does -- decided explicitly so a typo can be
-      // corrected in place instead of delete-and-replace being the
-      // only option.
-      if (hit is TextAnnotation && widget.controller.selectedId == hit.id) {
-        setState(() => _textEdit = _TextEditSession(existing: hit));
-        return;
-      }
-
       widget.controller.select(hit.id);
       _movingId = hit.id;
       _movingOriginal = hit;
       _moveAnchor = point;
+      // A tap on a TextAnnotation must be able to *either* open it for
+      // editing (a plain tap, no real movement) *or* move it (a drag)
+      // -- unlike every other type, where both cases already mean
+      // "move it" and a stationary one is simply a no-op translate.
+      // Deliberately regardless of whether this text was already
+      // selected: a plain tap always means "type", a drag always means
+      // "move", on the very first tap just as much as a second one --
+      // simpler than making the first tap select-only and the second
+      // edit, and what "if the user only taps it then they want to
+      // type text" means taken literally. Which of the two this
+      // gesture turns out to be is only knowable once it ends -- see
+      // _onPanEnd's kTouchSlop check.
+      if (hit is TextAnnotation) _movingTextStartPixel = localRaw;
       return;
     }
 
@@ -305,6 +330,19 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     // _onPanStart's priority: if this gesture grabbed a shape or a
     // handle, it continues doing that regardless of the active tool.
     if (_movingId != null) {
+      final startPixel = _movingTextStartPixel;
+      if (startPixel != null) {
+        _movingTextLastPixel = localRaw;
+        // Still ambiguous (see _movingTextStartPixel's own doc comment):
+        // do not translate the text at all until the finger has
+        // actually cleared kTouchSlop. Calling _dragSelection on every
+        // sub-slop update would nudge the text by a few pixels and push
+        // an undo entry before this gesture is even known to be a
+        // drag -- visible as a small jump right before the edit field
+        // opens on what the user experiences as a single stationary
+        // tap.
+        if ((localRaw - startPixel).distance <= kTouchSlop) return;
+      }
       _dragSelection(point, _toImageSpace(localRaw), contentRect);
       return;
     }
@@ -403,10 +441,31 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
 
   void _onPanEnd() {
     if (_movingId != null) {
+      final id = _movingId;
+      final startPixel = _movingTextStartPixel;
+      final lastPixel = _movingTextLastPixel;
       _movingId = null;
       _movingOriginal = null;
       _moveAnchor = null;
       _grip = null;
+      _movingTextStartPixel = null;
+      _movingTextLastPixel = null;
+
+      // A text annotation's gesture only resolves to "tap to edit" vs.
+      // "drag to move" here, once it is over -- see
+      // _movingTextStartPixel's own doc comment. Below kTouchSlop, the
+      // finger never really left its starting point (any movement so
+      // far was jitter, not an intended drag), so this was a tap: open
+      // editing instead of leaving a completed, effectively-zero move.
+      if (id != null && startPixel != null) {
+        final moved = lastPixel != null && (lastPixel - startPixel).distance > kTouchSlop;
+        if (!moved) {
+          final current = widget.controller.selected;
+          if (current is TextAnnotation && current.id == id) {
+            setState(() => _textEdit = _TextEditSession(existing: current));
+          }
+        }
+      }
       return;
     }
 
