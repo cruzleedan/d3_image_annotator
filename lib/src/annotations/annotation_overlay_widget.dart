@@ -13,6 +13,7 @@ import '../ui/tool_button.dart';
 import 'annotation.dart';
 import 'annotation_controller.dart';
 import 'annotation_handles.dart';
+import 'annotation_interaction_state.dart';
 import 'annotation_painter.dart';
 import 'annotation_style.dart';
 import 'annotation_tool.dart';
@@ -97,62 +98,53 @@ class AnnotationOverlay extends StatefulWidget {
 class _AnnotationOverlayState extends State<AnnotationOverlay> {
   /// The annotation being drawn right now. Held outside the controller
   /// so an in-progress drag does not push undo entries on every pointer
-  /// move -- it is committed once, on drag end.
+  /// move -- it is committed once, on drag end. A brand-new shape has
+  /// no id yet and is not one of `AnnotationInteractionState`'s six
+  /// named states (those describe what is happening to an *existing*
+  /// annotation), so this stays a separate lifecycle, same as before.
   Annotation? _draft;
 
   /// Drag origin, in normalized space, for the two-point tools.
   NormalizedPoint? _dragStart;
 
-  /// For select-mode drags: what is being moved and from where.
-  String? _movingId;
-  Annotation? _movingOriginal;
-  NormalizedPoint? _moveAnchor;
-
-  /// Pixel-space start of the current move drag, or null when not
-  /// moving a [TextAnnotation] specifically.
-  ///
-  /// Only tracked for text: every other type treats "tap it while
-  /// selected" and "drag it while selected" the same way (both move
-  /// it -- a stationary "drag" of zero distance is simply a no-op
-  /// translate), so they need no such distinction. Text cannot reuse
-  /// that: tapping an already-selected text annotation must *edit* it,
-  /// not silently no-op, so this gesture has to stay ambiguous between
-  /// "tap to edit" and "drag to move" until it is clear which one the
-  /// finger actually did -- resolved in [_onPanEnd] by comparing total
-  /// pixel displacement against [kTouchSlop], the same threshold
-  /// Flutter's own tap/drag recognizers use for exactly this
-  /// distinction.
-  Offset? _movingTextStartPixel;
-
-  /// The most recent raw pixel position seen while [_movingTextStartPixel]
-  /// is set -- `ScaleEndDetails` carries no position of its own, only
-  /// velocity, so this is what [_onPanEnd] actually compares against the
-  /// start to measure the gesture's total displacement.
-  Offset? _movingTextLastPixel;
-
-  /// Set when a drag grabbed a resize handle rather than the shape body.
-  AnnotationGrip? _grip;
-
-  /// The text-entry overlay's state, or null when it is closed. A third
-  /// interaction lifecycle alongside "grows as you drag" and "select and
-  /// move" (WORK-0034) -- text has no drag phase at all, so it does not
-  /// reuse `_draft`/`_dragStart`.
-  _TextEditSession? _textEdit;
+  /// What is currently happening to an *existing* annotation: a body
+  /// drag, a grip drag, or a live text-edit session -- null when
+  /// neither, meaning the six-state view `interactionState` exposes
+  /// falls back to [AnnotationUnselected]/[AnnotationSelected] purely
+  /// from `widget.controller.selectedId`, with nothing further to add
+  /// here. Consolidated into one field (WORK-0038) so "which of several
+  /// nullable fields are set together" is a type-level fact -- see
+  /// `AnnotationInteractionState`'s own doc comment.
+  AnnotationInteractionState? _interaction;
 
   /// Set for exactly one subsequent [_onPanStart] call after a text
   /// session is dismissed by tapping outside it, then always cleared --
   /// consumed whether or not it actually suppresses anything.
   ///
-  /// `_textEdit != null` alone cannot guard this: `TextField`'s
-  /// `onTapOutside` fires on the global pointer router as soon as the
-  /// down event arrives, which runs *before* this detector's own
-  /// gesture-arena-mediated `onScaleStart` resolves for that same tap --
-  /// so by the time `_onPanStart` actually runs, `onTapOutside` has
-  /// already committed and cleared `_textEdit`, and a `_textEdit != null`
-  /// check alone would see nothing to suppress and open a brand new
-  /// session right at the dismissing tap. This flag survives across
-  /// exactly that gap instead.
+  /// `_interaction is! AnnotationEditing` alone cannot guard this:
+  /// `TextField`'s `onTapOutside` fires on the global pointer router as
+  /// soon as the down event arrives, which runs *before* this
+  /// detector's own gesture-arena-mediated `onScaleStart` resolves for
+  /// that same tap -- so by the time `_onPanStart` actually runs,
+  /// `onTapOutside` has already committed and cleared `_interaction`,
+  /// and checking its type alone would see nothing to suppress and
+  /// open a brand new session right at the dismissing tap. This flag
+  /// survives across exactly that gap instead.
   bool _suppressNextPanStart = false;
+
+  /// The six-state view of what is happening to the controller's
+  /// currently selected annotation -- see `AnnotationInteractionState`'s
+  /// own doc comment for what each value means. Purely derived: nothing
+  /// here is stored beyond [_interaction] and `widget.controller`'s own
+  /// selection, so this can never drift out of sync with either.
+  AnnotationInteractionState get interactionState {
+    final interaction = _interaction;
+    if (interaction != null) return interaction;
+    final selected = widget.controller.selected;
+    return selected == null
+        ? const AnnotationUnselected()
+        : AnnotationSelected(selected);
+  }
 
   int _idCounter = 0;
 
@@ -214,12 +206,12 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     // still `text` -- found on-device as "the text I just typed gets
     // duplicated to the coordinate I tapped into". The tap that
     // dismisses text entry must only dismiss it, never also start a new
-    // gesture. `_textEdit != null` alone is not enough to detect this,
-    // since `onTapOutside` (a global pointer-router callback) has
-    // already run and cleared it by the time this gesture-arena-mediated
-    // callback fires for the very same tap -- `_suppressNextPanStart`
-    // covers that gap; see its own doc comment.
-    if (_textEdit != null || _suppressNextPanStart) {
+    // gesture. `_interaction is! AnnotationEditing` alone is not enough
+    // to detect this, since `onTapOutside` (a global pointer-router
+    // callback) has already run and cleared it by the time this
+    // gesture-arena-mediated callback fires for the very same tap --
+    // `_suppressNextPanStart` covers that gap; see its own doc comment.
+    if (_interaction is AnnotationEditing || _suppressNextPanStart) {
       _suppressNextPanStart = false;
       return;
     }
@@ -245,9 +237,9 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
         widget.imageTransform,
       );
       if (grip != null) {
-        _grip = grip;
-        _movingId = selected.id;
-        _movingOriginal = selected;
+        _interaction = grip == AnnotationGrip.rotate
+            ? AnnotationRotating(id: selected.id, original: selected)
+            : AnnotationResizing(id: selected.id, original: selected, grip: grip);
         return;
       }
     }
@@ -261,9 +253,6 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     );
     if (hit != null) {
       widget.controller.select(hit.id);
-      _movingId = hit.id;
-      _movingOriginal = hit;
-      _moveAnchor = point;
       // A tap on a TextAnnotation must be able to *either* open it for
       // editing (a plain tap, no real movement) *or* move it (a drag)
       // -- unlike every other type, where both cases already mean
@@ -276,7 +265,12 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
       // type text" means taken literally. Which of the two this
       // gesture turns out to be is only knowable once it ends -- see
       // _onPanEnd's kTouchSlop check.
-      if (hit is TextAnnotation) _movingTextStartPixel = localRaw;
+      _interaction = AnnotationMoving(
+        id: hit.id,
+        original: hit,
+        anchor: point,
+        textDragStartPixel: hit is TextAnnotation ? localRaw : null,
+      );
       return;
     }
 
@@ -287,7 +281,7 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     // the overlay text field directly, rather than starting a growing
     // draft the way every drag-based tool does below.
     if (widget.tool == AnnotationTool.text) {
-      setState(() => _textEdit = _TextEditSession(position: point));
+      setState(() => _interaction = AnnotationEditing(position: point));
       return;
     }
 
@@ -329,19 +323,24 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     // A move/resize in progress takes priority over drawing, mirroring
     // _onPanStart's priority: if this gesture grabbed a shape or a
     // handle, it continues doing that regardless of the active tool.
-    if (_movingId != null) {
-      final startPixel = _movingTextStartPixel;
-      if (startPixel != null) {
-        _movingTextLastPixel = localRaw;
-        // Still ambiguous (see _movingTextStartPixel's own doc comment):
-        // do not translate the text at all until the finger has
-        // actually cleared kTouchSlop. Calling _dragSelection on every
-        // sub-slop update would nudge the text by a few pixels and push
-        // an undo entry before this gesture is even known to be a
-        // drag -- visible as a small jump right before the edit field
-        // opens on what the user experiences as a single stationary
-        // tap.
-        if ((localRaw - startPixel).distance <= kTouchSlop) return;
+    final interaction = _interaction;
+    if (interaction is AnnotationMoving ||
+        interaction is AnnotationResizing ||
+        interaction is AnnotationRotating) {
+      if (interaction is AnnotationMoving) {
+        final startPixel = interaction.textDragStartPixel;
+        if (startPixel != null) {
+          _interaction = interaction.copyWith(textDragLastPixel: localRaw);
+          // Still ambiguous (see AnnotationMoving's own doc comment): do
+          // not translate the text at all until the finger has actually
+          // cleared kTouchSlop. Applying the move on every sub-slop
+          // update would nudge the text by a few pixels and push an
+          // undo entry before this gesture is even known to be a drag
+          // -- visible as a small jump right before the edit field
+          // opens on what the user experiences as a single stationary
+          // tap.
+          if ((localRaw - startPixel).distance <= kTouchSlop) return;
+        }
       }
       _dragSelection(point, _toImageSpace(localRaw), contentRect);
       return;
@@ -382,18 +381,13 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
     Offset pixelPosition,
     Rect contentRect,
   ) {
-    final id = _movingId;
-    final original = _movingOriginal;
-    if (id == null || original == null) return;
-
-    final grip = _grip;
-    if (grip != null) {
-      // Resizing works from the *current* geometry, not the drag
-      // origin: each update sets the grabbed corner to where the finger
-      // is, so the shape tracks it exactly rather than accumulating.
-      final current = widget.controller.selected ?? original;
-
-      if (grip == AnnotationGrip.rotate) {
+    switch (_interaction) {
+      case AnnotationRotating(:final id, :final original):
+        // Resizing/rotating works from the *current* geometry, not the
+        // drag origin: each update sets the grabbed corner to where the
+        // finger is, so the shape tracks it exactly rather than
+        // accumulating.
+        final current = widget.controller.selected ?? original;
         final rotated = rotateAnnotation(
           current,
           pixelPosition,
@@ -401,33 +395,35 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
           widget.imageTransform,
         );
         if (rotated != null) widget.controller.update(id, rotated);
-        return;
-      }
 
-      // Corner-drag resizes along the shape's own tilted axes, keeping
-      // the *opposite* corner anchored on screen (WORK-0035, fixed for
-      // rotated shapes as a follow-up) -- see
-      // resizeRotatedAnnotation's own doc comment for why this needs a
-      // dedicated rotation-aware function rather than routing a
-      // computed point through the plain resizeAnnotation.
-      final resized = resizeRotatedAnnotation(
-        current,
-        grip,
-        pixelPosition,
-        contentRect,
-        widget.imageTransform,
-      );
-      if (resized != null) widget.controller.update(id, resized);
-      return;
+      case AnnotationResizing(:final id, :final original, :final grip):
+        final current = widget.controller.selected ?? original;
+        // Corner-drag resizes along the shape's own tilted axes, keeping
+        // the *opposite* corner anchored on screen (WORK-0035, fixed for
+        // rotated shapes as a follow-up) -- see
+        // resizeRotatedAnnotation's own doc comment for why this needs a
+        // dedicated rotation-aware function rather than routing a
+        // computed point through the plain resizeAnnotation.
+        final resized = resizeRotatedAnnotation(
+          current,
+          grip,
+          pixelPosition,
+          contentRect,
+          widget.imageTransform,
+        );
+        if (resized != null) widget.controller.update(id, resized);
+
+      case AnnotationMoving(:final id, :final original, :final anchor):
+        final dx = point.x - anchor.x;
+        final dy = point.y - anchor.y;
+        final moved = translateAnnotation(original, dx, dy);
+        if (moved != null) widget.controller.update(id, moved);
+
+      case AnnotationUnselected() || AnnotationSelected() || AnnotationEditing() || null:
+      // Nothing to drag -- this is only ever called from _onPanUpdate's
+      // own branch, which already checked _interaction is one of the
+      // three cases above.
     }
-
-    final anchor = _moveAnchor;
-    if (anchor == null) return;
-
-    final dx = point.x - anchor.x;
-    final dy = point.y - anchor.y;
-    final moved = translateAnnotation(original, dx, dy);
-    if (moved != null) widget.controller.update(id, moved);
   }
 
   /// Drops an in-progress stroke without committing it.
@@ -440,29 +436,28 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
   }
 
   void _onPanEnd() {
-    if (_movingId != null) {
-      final id = _movingId;
-      final startPixel = _movingTextStartPixel;
-      final lastPixel = _movingTextLastPixel;
-      _movingId = null;
-      _movingOriginal = null;
-      _moveAnchor = null;
-      _grip = null;
-      _movingTextStartPixel = null;
-      _movingTextLastPixel = null;
+    final interaction = _interaction;
+    if (interaction is AnnotationMoving ||
+        interaction is AnnotationResizing ||
+        interaction is AnnotationRotating) {
+      _interaction = null;
 
       // A text annotation's gesture only resolves to "tap to edit" vs.
-      // "drag to move" here, once it is over -- see
-      // _movingTextStartPixel's own doc comment. Below kTouchSlop, the
-      // finger never really left its starting point (any movement so
-      // far was jitter, not an intended drag), so this was a tap: open
-      // editing instead of leaving a completed, effectively-zero move.
-      if (id != null && startPixel != null) {
-        final moved = lastPixel != null && (lastPixel - startPixel).distance > kTouchSlop;
-        if (!moved) {
-          final current = widget.controller.selected;
-          if (current is TextAnnotation && current.id == id) {
-            setState(() => _textEdit = _TextEditSession(existing: current));
+      // "drag to move" here, once it is over -- see AnnotationMoving's
+      // own doc comment. Below kTouchSlop, the finger never really left
+      // its starting point (any movement so far was jitter, not an
+      // intended drag), so this was a tap: open editing instead of
+      // leaving a completed, effectively-zero move.
+      if (interaction is AnnotationMoving) {
+        final startPixel = interaction.textDragStartPixel;
+        if (startPixel != null) {
+          final lastPixel = interaction.textDragLastPixel;
+          final moved = lastPixel != null && (lastPixel - startPixel).distance > kTouchSlop;
+          if (!moved) {
+            final current = widget.controller.selected;
+            if (current is TextAnnotation && current.id == interaction.id) {
+              setState(() => _interaction = AnnotationEditing(existing: current));
+            }
           }
         }
       }
@@ -497,9 +492,9 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
   /// empty (WORK-0034) -- an empty submit must not create or leave
   /// behind an invisible annotation with nothing to show or hit-test.
   void _commitTextEdit(String text) {
-    final session = _textEdit;
-    if (session == null) return;
-    setState(() => _textEdit = null);
+    final session = _interaction;
+    if (session is! AnnotationEditing) return;
+    setState(() => _interaction = null);
 
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
@@ -526,7 +521,7 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
   }
 
   void _cancelTextEdit() {
-    setState(() => _textEdit = null);
+    setState(() => _interaction = null);
   }
 
   @override
@@ -553,8 +548,13 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
             // onScale* reports pointerCount, so a single detector can
             // route one finger to drawing and two to zoom without any
             // arena contention at all.
-            final textEdit = _textEdit;
-            final selected = draft == null && textEdit == null
+            final editing = _interaction is AnnotationEditing
+                ? _interaction as AnnotationEditing
+                : null;
+            // Floating controls stay visible through a move/resize/
+            // rotate drag, same as before this state was consolidated
+            // -- only a fresh draft or an open text field hides them.
+            final selected = draft == null && editing == null
                 ? widget.controller.selected
                 : null;
 
@@ -577,7 +577,10 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
                       // it started before the second landed.
                       _abandonDraft();
                       widget.onScaleUpdate?.call(d);
-                    } else if (_draft != null || _movingId != null) {
+                    } else if (_draft != null ||
+                        _interaction is AnnotationMoving ||
+                        _interaction is AnnotationResizing ||
+                        _interaction is AnnotationRotating) {
                       _onPanUpdate(d.localFocalPoint, contentRect);
                     }
                   },
@@ -598,7 +601,7 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
                           // both would show the old text doubled under
                           // the field editing it.
                           for (final a in widget.controller.annotations)
-                            if (a.id != textEdit?.existing?.id) a,
+                            if (a.id != editing?.existing?.id) a,
                           ?draft,
                         ],
                         contentRect: contentRect,
@@ -633,11 +636,11 @@ class _AnnotationOverlayState extends State<AnnotationOverlay> {
                 // sibling of the drawing GestureDetector, not nested
                 // inside it, so the TextField's own taps/keyboard focus
                 // never enter that pan/scale gesture arena at all.
-                if (textEdit != null)
+                if (editing != null)
                   _MaybeTransformed(
                     transform: widget.transform,
                     child: _TextEntryOverlay(
-                      session: textEdit,
+                      session: editing,
                       contentRect: contentRect,
                       transform: widget.imageTransform,
                       style: widget.controller.style,
@@ -819,23 +822,8 @@ class _FloatingShapeControls extends StatelessWidget {
   }
 }
 
-/// What the text-entry overlay is doing: placing a brand-new
-/// [TextAnnotation] at [position], or re-editing [existing]'s content in
-/// place (WORK-0034). Exactly one of the two is set.
-@immutable
-class _TextEditSession {
-  const _TextEditSession({this.position, this.existing})
-    : assert(
-        (position == null) != (existing == null),
-        'exactly one of position or existing must be given',
-      );
-
-  final NormalizedPoint? position;
-  final TextAnnotation? existing;
-}
-
-/// A single-line [TextField] positioned at a [_TextEditSession]'s
-/// anchor point, for placing or re-editing a [TextAnnotation]
+/// A single-line [TextField] positioned at an [AnnotationEditing]
+/// session's anchor point, for placing or re-editing a [TextAnnotation]
 /// (WORK-0034).
 ///
 /// Positioned in pixel space like the floating shape controls -- a
@@ -853,12 +841,12 @@ class _TextEntryOverlay extends StatefulWidget {
     required this.onDismissedByTapOutside,
   });
 
-  final _TextEditSession session;
+  final AnnotationEditing session;
   final Rect contentRect;
   final ImageTransform transform;
 
   /// The style a *new* placement would use -- irrelevant when
-  /// [_TextEditSession.existing] is set, since editing keeps that
+  /// [AnnotationEditing.existing] is set, since editing keeps that
   /// annotation's own style untouched.
   final AnnotationStyle style;
 
