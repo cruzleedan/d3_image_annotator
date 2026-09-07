@@ -44,6 +44,7 @@ class D3AnnotatorScreen extends StatefulWidget {
     this.initialTool = AnnotationTool.rectangle,
     this.sourceImageSize,
     this.onBindingChanged,
+    this.visibleTools,
   });
 
   /// What sits behind the annotations: a real image, or a plain colour
@@ -85,6 +86,24 @@ class D3AnnotatorScreen extends StatefulWidget {
 
   /// See `D3ImageAnnotator.onBindingChanged`.
   final ValueChanged<AnnotationBinding>? onBindingChanged;
+
+  /// Restricts the draw toolbar to this set, omitting every other
+  /// [AnnotationTool] entirely rather than merely disabling it
+  /// (WORK-0038). Null (the default) shows every tool, matching the
+  /// behaviour before this parameter existed.
+  ///
+  /// Meant for a consumer whose use case only ever needs one or two
+  /// shape types -- e.g. an app that only wants "circle the defect"
+  /// has no use for freehand or text, and a trimmed toolbar reads as
+  /// more purpose-built than a full one with most buttons unused.
+  ///
+  /// Does not affect [initialTool] or [AnnotatorToolGroup.adjust]'s own
+  /// crop/rotate/mirror/reset controls, which are unrelated to
+  /// [AnnotationTool] entirely. Choosing an [initialTool] outside
+  /// [visibleTools] is a caller error this does not guard against: the
+  /// toolbar simply opens with nothing visually selected, rather than
+  /// asserting or substituting a different tool on the caller's behalf.
+  final Set<AnnotationTool>? visibleTools;
 
   @override
   State<D3AnnotatorScreen> createState() => _D3AnnotatorScreenState();
@@ -230,6 +249,7 @@ class _D3AnnotatorScreenState extends State<D3AnnotatorScreen> {
                   controller: widget.controller,
                   tool: _tool,
                   group: _group,
+                  visibleTools: widget.visibleTools,
                   showAdjustGroup: _showAdjustGroup,
                   onToolChanged: (t) => setState(() => _tool = t),
                   onGroupChanged: (g) => setState(() => _group = g),
@@ -332,6 +352,7 @@ class _BottomBars extends StatelessWidget {
     required this.controller,
     required this.tool,
     required this.group,
+    this.visibleTools,
     required this.showAdjustGroup,
     required this.onToolChanged,
     required this.onGroupChanged,
@@ -341,6 +362,9 @@ class _BottomBars extends StatelessWidget {
   final AnnotationController controller;
   final AnnotationTool tool;
   final AnnotatorToolGroup group;
+
+  /// See `D3AnnotatorScreen.visibleTools`.
+  final Set<AnnotationTool>? visibleTools;
 
   /// Whether the Crop/Rotate/Mirror/Reset group is offered at all --
   /// false for a colour background (WORK-0036), which has nothing for
@@ -384,24 +408,25 @@ class _BottomBars extends StatelessWidget {
   List<Widget> _tools(AnnotatorToolGroup group) => switch (group) {
     AnnotatorToolGroup.draw => [
       for (final t in AnnotationTool.values)
-        D3ToolButton(
-          icon: switch (t) {
-            AnnotationTool.rectangle => Icons.crop_square,
-            AnnotationTool.circle => Icons.circle_outlined,
-            AnnotationTool.arrow => Icons.arrow_outward,
-            AnnotationTool.freehand => Icons.gesture,
-            AnnotationTool.text => Icons.text_fields,
-          },
-          label: switch (t) {
-            AnnotationTool.rectangle => 'Box',
-            AnnotationTool.circle => 'Circle',
-            AnnotationTool.arrow => 'Arrow',
-            AnnotationTool.freehand => 'Draw',
-            AnnotationTool.text => 'Text',
-          },
-          selected: t == tool,
-          onPressed: () => onToolChanged(t),
-        ),
+        if (visibleTools?.contains(t) ?? true)
+          D3ToolButton(
+            icon: switch (t) {
+              AnnotationTool.rectangle => Icons.crop_square,
+              AnnotationTool.circle => Icons.circle_outlined,
+              AnnotationTool.arrow => Icons.arrow_outward,
+              AnnotationTool.freehand => Icons.gesture,
+              AnnotationTool.text => Icons.text_fields,
+            },
+            label: switch (t) {
+              AnnotationTool.rectangle => 'Box',
+              AnnotationTool.circle => 'Circle',
+              AnnotationTool.arrow => 'Arrow',
+              AnnotationTool.freehand => 'Draw',
+              AnnotationTool.text => 'Text',
+            },
+            selected: t == tool,
+            onPressed: () => onToolChanged(t),
+          ),
     ],
     AnnotatorToolGroup.adjust => [
       D3ToolButton(

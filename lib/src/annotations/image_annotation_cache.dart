@@ -48,6 +48,27 @@ class ImageAnnotationEntry {
 /// resolving it to bytes, by whatever storage strategy the consumer app
 /// uses (filesystem, database blob, content-provider URI, asset bundle),
 /// is entirely this function's job.
+///
+/// **A reference meant to survive a save/reload cycle must be
+/// resolvable by the app's own persisted lookup, not a transient
+/// in-memory one** (WORK-0038). Concretely: a reference that only makes
+/// sense against, say, a `Map` built fresh each app launch will resolve
+/// fine while annotating, then fail every time afterward, once the
+/// saved `AnnotationDocument` is reloaded in a later session and handed
+/// to a *new* resolver instance that never populated that map. The
+/// reference has to be something the app can look up again on its own
+/// terms later -- a stored file path, a database row id, a
+/// content-provider URI -- exactly the kind of value `ImageAnnotation
+/// .reference`'s own doc comment already describes as the intended
+/// shape.
+///
+/// **A consumer app with no such persisted-reference story of its own
+/// does not need to support this at all.** Nothing requires exposing
+/// the image-annotation tool; an app whose annotated images are, say,
+/// flat photo files with no separate asset/stamp registry can simply
+/// not offer it (see `D3AnnotatorScreen.visibleTools`) rather than
+/// wiring up a resolver for a capability it has no persisted backing
+/// for.
 typedef ImageReferenceResolver =
     Future<Uint8List> Function(String reference);
 

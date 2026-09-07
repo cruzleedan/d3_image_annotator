@@ -20,6 +20,8 @@ void main() {
     VoidCallback? onDone,
     AnnotationBackground? background,
     AnnotationController? controller,
+    Set<AnnotationTool>? visibleTools,
+    AnnotationTool initialTool = AnnotationTool.rectangle,
   }) async {
     tester.view.physicalSize = const Size(1000, 1600);
     tester.view.devicePixelRatio = 1.0;
@@ -41,6 +43,8 @@ void main() {
           controller: c,
           onClose: onClose,
           onDone: onDone,
+          visibleTools: visibleTools,
+          initialTool: initialTool,
         ),
       ),
     );
@@ -88,6 +92,75 @@ void main() {
 
       expect(find.byType(AppBar), findsNothing);
     });
+  });
+
+  group('visibleTools (WORK-0038)', () {
+    testWidgets('null (the default) shows every tool, unchanged behaviour', (
+      tester,
+    ) async {
+      await pumpScreen(tester);
+
+      expect(find.text('Box'), findsOneWidget);
+      expect(find.text('Circle'), findsOneWidget);
+      expect(find.text('Arrow'), findsOneWidget);
+      expect(find.text('Draw'), findsWidgets);
+      expect(find.text('Text'), findsOneWidget);
+    });
+
+    testWidgets('restricts the draw toolbar to exactly the given set', (
+      tester,
+    ) async {
+      await pumpScreen(
+        tester,
+        visibleTools: const {AnnotationTool.rectangle, AnnotationTool.circle},
+      );
+
+      expect(find.text('Box'), findsOneWidget);
+      expect(find.text('Circle'), findsOneWidget);
+      expect(find.text('Arrow'), findsNothing);
+      expect(find.text('Text'), findsNothing);
+      // 'Draw' is ambiguous with the group-switcher chip of the same
+      // name (see the freehand tool's own label) -- the freehand tool
+      // itself is excluded here, so its icon is the more specific check.
+      expect(find.byIcon(Icons.gesture), findsNothing);
+    });
+
+    testWidgets('an empty set hides every draw tool but leaves Adjust '
+        'untouched', (tester) async {
+      await pumpScreen(tester, visibleTools: const {});
+
+      expect(find.text('Box'), findsNothing);
+      expect(find.text('Circle'), findsNothing);
+      expect(find.text('Arrow'), findsNothing);
+      expect(find.byIcon(Icons.gesture), findsNothing);
+      expect(find.text('Text'), findsNothing);
+      // The Adjust group switcher itself is unrelated to AnnotationTool
+      // and must still be offered.
+      expect(find.text('Adjust'), findsOneWidget);
+
+      await tester.tap(find.text('Adjust'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Crop'), findsOneWidget);
+      expect(find.text('Rotate'), findsOneWidget);
+    });
+
+    testWidgets(
+      'an initialTool outside visibleTools opens with nothing selected, '
+      'not a crash',
+      (tester) async {
+        // Documented caller responsibility, not enforced -- see
+        // D3AnnotatorScreen.visibleTools's own doc comment.
+        await pumpScreen(
+          tester,
+          visibleTools: const {AnnotationTool.circle},
+          initialTool: AnnotationTool.rectangle,
+        );
+
+        expect(tester.takeException(), isNull);
+        expect(find.text('Circle'), findsOneWidget);
+      },
+    );
   });
 
   group('actions', () {
