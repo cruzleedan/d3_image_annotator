@@ -125,8 +125,26 @@ Rect textBoundsInPixels(
   )..layout();
 
   final topLeft = mapPointToPixels(text.position, contentRect, transform);
-  return topLeft & painter.size;
+  final padding = textBoxPaddingInPixels(fontSizePixels);
+  return (topLeft & painter.size).inflate(padding);
 }
+
+/// Inset between a text annotation's border/background and its glyphs,
+/// in pixels, for a resolved font size of [fontSizePixels] -- the same
+/// "textfield with content padding" look a bordered box needs to avoid
+/// hugging the letters. Proportional to font size, the same
+/// normalization every other text-relative measurement in this package
+/// uses, so the box reads the same relative to the glyphs at any zoom
+/// or export resolution.
+///
+/// Applied unconditionally in [textBoundsInPixels] -- not only when a
+/// border is actually drawn -- because that function is the single
+/// shared source of truth for hit-testing, corner handles, the
+/// selection outline, and the floating controls' anchor points; the
+/// alternative (padding only sometimes) would mean those would have to
+/// agree separately on when it applies, and silently drift if they
+/// ever didn't.
+double textBoxPaddingInPixels(double fontSizePixels) => fontSizePixels * 0.3;
 
 /// The four corners of [mapped] (an unrotated, already-mapped pixel-space
 /// rect) after rotating [rotationRadians] about its own centre, in
@@ -498,7 +516,22 @@ Annotation? _resizeTextByFontSize(
               centerToOpposite.dy * math.cos(rotation),
         );
   final newCenter = anchorWorld - rotatedCenterToOpposite;
-  final newTopLeftWorld = newCenter - halfDiagonal;
+  final newPaddedTopLeftWorld = newCenter - halfDiagonal;
+
+  // `newPaddedTopLeftWorld` is the *padded* box's unrotated top-left --
+  // everything above (`newSize`, `halfDiagonal`) came from
+  // `textBoundsInPixels`, which inflates by padding *after* mapping
+  // `position` to pixels. `TextAnnotation.position` itself anchors the
+  // pre-padding point, so it has to be recovered by subtracting that
+  // same padding back out before unmapping -- skipping this step left
+  // the restored position off by exactly the padding amount in both
+  // axes, confirmed as the cause of a real anchor-corner drift once
+  // padding was introduced (this function's own tests caught it).
+  final newFontSizePixels = resized.style.resolveFontSize(
+    shorterSidePixels(contentRect, transform),
+  );
+  final padding = textBoxPaddingInPixels(newFontSizePixels);
+  final newTopLeftWorld = newPaddedTopLeftWorld + Offset(padding, padding);
 
   final newPosition = _toOriginalSpace(newTopLeftWorld, contentRect, transform);
   return resized.copyWith(position: newPosition);

@@ -17,8 +17,12 @@ class AnnotationStyle {
     this.filled = false,
     this.fontSize = 0.03,
     this.backgroundColor,
+    this.borderWidth = 0.0,
+    this.borderRadius = 0.0,
   }) : assert(strokeWidth > 0, 'strokeWidth must be positive'),
-       assert(fontSize > 0, 'fontSize must be positive');
+       assert(fontSize > 0, 'fontSize must be positive'),
+       assert(borderWidth >= 0, 'borderWidth must not be negative'),
+       assert(borderRadius >= 0, 'borderRadius must not be negative');
 
   final Color color;
 
@@ -50,6 +54,26 @@ class AnnotationStyle {
   /// Ignored by every type except `TextAnnotation`.
   final Color? backgroundColor;
 
+  /// A rounded-rect outline drawn around the text's own box, in [color]
+  /// -- zero (the default) means no border, rather than a separate
+  /// boolean flag, the same "zero-is-off" convention every other
+  /// optional numeric style already uses in this package.
+  ///
+  /// Normalized to the image's shorter side, like [strokeWidth] and for
+  /// the same reason. Found necessary on-device: bare floating text
+  /// gave no visual cue that it was an editable field one could tap
+  /// away from to finish, the way a bordered textbox does.
+  ///
+  /// Ignored by every type except `TextAnnotation`.
+  final double borderWidth;
+
+  /// Corner radius of [borderWidth]'s outline, as a fraction of the
+  /// image's shorter side -- the same normalization, for the same
+  /// reason. Meaningless while [borderWidth] is zero.
+  ///
+  /// Ignored by every type except `TextAnnotation`.
+  final double borderRadius;
+
   /// Resolves [strokeWidth] to real pixels for a canvas whose shorter
   /// side is [shorterSidePixels].
   double resolveStrokeWidth(double shorterSidePixels) =>
@@ -61,6 +85,14 @@ class AnnotationStyle {
   double resolveFontSize(double shorterSidePixels) =>
       fontSize * shorterSidePixels;
 
+  /// Resolves [borderWidth] to real pixels. See [resolveStrokeWidth].
+  double resolveBorderWidth(double shorterSidePixels) =>
+      borderWidth * shorterSidePixels;
+
+  /// Resolves [borderRadius] to real pixels. See [resolveStrokeWidth].
+  double resolveBorderRadius(double shorterSidePixels) =>
+      borderRadius * shorterSidePixels;
+
   AnnotationStyle copyWith({
     Color? color,
     double? strokeWidth,
@@ -68,6 +100,8 @@ class AnnotationStyle {
     double? fontSize,
     Color? backgroundColor,
     bool clearBackgroundColor = false,
+    double? borderWidth,
+    double? borderRadius,
   }) {
     return AnnotationStyle(
       color: color ?? this.color,
@@ -77,6 +111,8 @@ class AnnotationStyle {
       backgroundColor: clearBackgroundColor
           ? null
           : (backgroundColor ?? this.backgroundColor),
+      borderWidth: borderWidth ?? this.borderWidth,
+      borderRadius: borderRadius ?? this.borderRadius,
     );
   }
 
@@ -89,15 +125,25 @@ class AnnotationStyle {
           strokeWidth == other.strokeWidth &&
           filled == other.filled &&
           fontSize == other.fontSize &&
-          backgroundColor == other.backgroundColor;
+          backgroundColor == other.backgroundColor &&
+          borderWidth == other.borderWidth &&
+          borderRadius == other.borderRadius;
 
   @override
-  int get hashCode =>
-      Object.hash(color, strokeWidth, filled, fontSize, backgroundColor);
+  int get hashCode => Object.hash(
+    color,
+    strokeWidth,
+    filled,
+    fontSize,
+    backgroundColor,
+    borderWidth,
+    borderRadius,
+  );
 
   @override
   String toString() =>
       'AnnotationStyle(color: $color, strokeWidth: $strokeWidth, '
       'filled: $filled, fontSize: $fontSize, '
-      'backgroundColor: $backgroundColor)';
+      'backgroundColor: $backgroundColor, borderWidth: $borderWidth, '
+      'borderRadius: $borderRadius)';
 }

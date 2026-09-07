@@ -342,6 +342,53 @@ void main() {
       expect(restored.style.backgroundColor, isNull);
     });
 
+    test('borderWidth and borderRadius round-trip together', () {
+      const styled = TextAnnotation(
+        id: 't1',
+        style: AnnotationStyle(borderWidth: 0.005, borderRadius: 0.01),
+        position: NormalizedPoint(0.1, 0.1),
+        text: 'boxed',
+      );
+
+      final restored = annotationFromJson(annotationToJson(styled));
+
+      final style = (restored as TextAnnotation).style;
+      expect(style.borderWidth, 0.005);
+      expect(style.borderRadius, 0.01);
+    });
+
+    test('a zero borderWidth is not written to JSON, same as every other '
+        'default-valued style field', () {
+      const styled = TextAnnotation(
+        id: 't1',
+        style: AnnotationStyle(),
+        position: NormalizedPoint(0.1, 0.1),
+        text: 'plain',
+      );
+
+      final json = annotationToJson(styled);
+      final styleJson = json['style'] as Map<String, Object?>;
+
+      expect(styleJson.containsKey('borderWidth'), isFalse);
+      expect(styleJson.containsKey('borderRadius'), isFalse);
+    });
+
+    test('a document with no "borderWidth"/"borderRadius" keys decodes as '
+        'zero, not throwing', () {
+      final json = <String, Object?>{
+        'type': 'text',
+        'id': 't1',
+        'style': {'color': 0xFFFF0000, 'strokeWidth': 0.01, 'filled': false},
+        'position': {'x': 0.1, 'y': 0.1},
+        'text': 'plain',
+      };
+
+      final restored = annotationFromJson(json) as TextAnnotation;
+
+      expect(restored.style.borderWidth, 0);
+      expect(restored.style.borderRadius, 0);
+    });
+
     test('a document containing text bumps past a version-1-only reader '
         'as expected', () {
       // The other half of the schema-bump guarantee: a build that only

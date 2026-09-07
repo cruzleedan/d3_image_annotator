@@ -465,6 +465,90 @@ void main() {
       },
     );
 
+    testWidgets(
+      'tapping a border-width swatch changes borderWidth, undoably',
+      (tester) async {
+        final controller = await pumpRestyle(tester, text);
+        expect(controller.annotations.single.style.borderWidth, 0);
+
+        final swatches = find.bySemanticsLabel('Border width');
+        await tester.tap(swatches.at(1));
+        await tester.pumpAndSettle();
+
+        expect(controller.annotations.single.style.borderWidth, greaterThan(0));
+
+        controller.undo();
+        expect(controller.annotations.single.style.borderWidth, 0);
+      },
+    );
+
+    testWidgets(
+      'tapping the "no border" swatch clears borderWidth back to zero',
+      (tester) async {
+        final bordered = text.copyWithStyle(
+          text.style.copyWith(borderWidth: 0.01),
+        );
+        final controller = await pumpRestyle(tester, bordered);
+        expect(controller.annotations.single.style.borderWidth, greaterThan(0));
+
+        final swatches = find.bySemanticsLabel('Border width');
+        await tester.tap(swatches.first);
+        await tester.pumpAndSettle();
+
+        expect(controller.annotations.single.style.borderWidth, 0);
+      },
+    );
+
+    testWidgets(
+      'border-radius controls only appear once a border is set',
+      (tester) async {
+        await pumpRestyle(tester, text);
+        expect(find.bySemanticsLabel('Border radius'), findsNothing);
+
+        final bordered = text.copyWithStyle(
+          text.style.copyWith(borderWidth: 0.01),
+        );
+        await pumpRestyle(tester, bordered);
+        expect(find.bySemanticsLabel('Border radius'), findsWidgets);
+      },
+    );
+
+    testWidgets(
+      'tapping a border-radius swatch changes borderRadius, undoably',
+      (tester) async {
+        final bordered = text.copyWithStyle(
+          text.style.copyWith(borderWidth: 0.01),
+        );
+        final controller = await pumpRestyle(tester, bordered);
+        expect(controller.annotations.single.style.borderRadius, 0);
+
+        // With colour + font-size + background + border-width +
+        // border-radius controls all present at once, this row is wider
+        // than the default test surface -- the bar already scrolls
+        // horizontally for exactly this reason, so scroll the target
+        // into view before tapping rather than assuming it fits.
+        final swatches = find.bySemanticsLabel('Border radius');
+        await tester.ensureVisible(swatches.at(1));
+        await tester.pumpAndSettle();
+        await tester.tap(swatches.at(1));
+        await tester.pumpAndSettle();
+
+        expect(controller.annotations.single.style.borderRadius, greaterThan(0));
+
+        controller.undo();
+        expect(controller.annotations.single.style.borderRadius, 0);
+      },
+    );
+
+    testWidgets(
+      'non-text types show neither border-width nor border-radius controls',
+      (tester) async {
+        await pumpRestyle(tester, rect());
+        expect(find.bySemanticsLabel('Border width'), findsNothing);
+        expect(find.bySemanticsLabel('Border radius'), findsNothing);
+      },
+    );
+
     testWidgets('the fill toggle flips filled, undoably', (tester) async {
       final controller = await pumpRestyle(tester, rect());
       expect(controller.annotations.single.style.filled, isFalse);

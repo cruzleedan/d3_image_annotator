@@ -335,6 +335,10 @@ Map<String, Object?> _styleToJson(AnnotationStyle style) => {
     'fontSize': style.fontSize,
   if (style.backgroundColor case final bg?)
     'backgroundColor': bg.toARGB32(),
+  if (style.borderWidth != const AnnotationStyle().borderWidth)
+    'borderWidth': style.borderWidth,
+  if (style.borderRadius != const AnnotationStyle().borderRadius)
+    'borderRadius': style.borderRadius,
 };
 
 AnnotationStyle _styleFromJson(Map<String, Object?> json) {
@@ -353,6 +357,14 @@ AnnotationStyle _styleFromJson(Map<String, Object?> json) {
   if (backgroundColor != null && backgroundColor is! int) {
     throw const AnnotationDecodeException('"backgroundColor" must be an int');
   }
+  final borderWidth = json['borderWidth'];
+  if (borderWidth != null && borderWidth is! num) {
+    throw const AnnotationDecodeException('"borderWidth" must be a number');
+  }
+  final borderRadius = json['borderRadius'];
+  if (borderRadius != null && borderRadius is! num) {
+    throw const AnnotationDecodeException('"borderRadius" must be a number');
+  }
   return AnnotationStyle(
     color: Color(color),
     strokeWidth: strokeWidth.toDouble(),
@@ -361,6 +373,10 @@ AnnotationStyle _styleFromJson(Map<String, Object?> json) {
     backgroundColor: backgroundColor == null
         ? null
         : Color(backgroundColor as int),
+    borderWidth:
+        (borderWidth as num?)?.toDouble() ?? const AnnotationStyle().borderWidth,
+    borderRadius: (borderRadius as num?)?.toDouble() ??
+        const AnnotationStyle().borderRadius,
   );
 }
 

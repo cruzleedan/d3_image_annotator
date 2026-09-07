@@ -844,18 +844,45 @@ class _TextEntryOverlayState extends State<_TextEntryOverlay> {
   Widget build(BuildContext context) {
     final existing = widget.session.existing;
     final style = existing?.style ?? widget.style;
-    final fontSizePixels = style.resolveFontSize(
-      shorterSidePixels(widget.contentRect, widget.transform),
-    );
+    final shorterSide = shorterSidePixels(widget.contentRect, widget.transform);
+    final fontSizePixels = style.resolveFontSize(shorterSide);
+    final padding = textBoxPaddingInPixels(fontSizePixels);
 
+    // The *unpadded* anchor -- TextAnnotation.position itself, mapped to
+    // pixels -- not textBoundsInPixels' own (already-padded) topLeft.
+    // The TextField below recreates that same padding itself via
+    // `contentPadding`, so its glyphs land exactly where
+    // `textBoundsInPixels`/`_paintText` put the committed render's
+    // glyphs: this field's border sits flush with what the committed
+    // border draws, and the two never need to agree on padding via two
+    // separately-maintained numbers.
     final anchor = existing != null
-        ? textBoundsInPixels(existing, widget.contentRect, widget.transform)
-              .topLeft
+        ? mapPointToPixels(existing.position, widget.contentRect, widget.transform)
         : mapPointToPixels(
             widget.session.position!,
             widget.contentRect,
             widget.transform,
           );
+
+    final borderWidthPixels = style.resolveBorderWidth(shorterSide);
+    final borderRadiusPixels = style.resolveBorderRadius(shorterSide);
+    // A hairline default border while editing, even if the committed
+    // style has none: an unbordered field floating on the canvas gave
+    // no visual cue that it behaves like a textbox one can tap away
+    // from -- found on-device (WORK-0034 follow-up). The committed,
+    // rendered annotation still honours the real borderWidth (including
+    // zero) once this session closes.
+    final editingBorderWidth = borderWidthPixels > 0 ? borderWidthPixels : 1.0;
+    final editingBorderColor = borderWidthPixels > 0
+        ? style.color
+        : style.color.withValues(alpha: 0.4);
+    final outline = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(borderRadiusPixels),
+      borderSide: BorderSide(
+        color: editingBorderColor,
+        width: editingBorderWidth,
+      ),
+    );
 
     // Own Stack, the same pattern _FloatingShapeControls uses: a bare
     // Positioned needs a Stack as its direct ancestor, and this widget
@@ -870,7 +897,7 @@ class _TextEntryOverlayState extends State<_TextEntryOverlay> {
             type: MaterialType.transparency,
             child: ConstrainedBox(
               constraints: BoxConstraints(
-                minWidth: math.max(fontSizePixels * 4, 80),
+                minWidth: math.max(fontSizePixels * 4, 80) + padding * 2,
               ),
               child: IntrinsicWidth(
                 child: TextField(
@@ -892,8 +919,10 @@ class _TextEntryOverlayState extends State<_TextEntryOverlay> {
                     isDense: true,
                     filled: style.backgroundColor != null,
                     fillColor: style.backgroundColor,
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.zero,
+                    border: outline,
+                    enabledBorder: outline,
+                    focusedBorder: outline,
+                    contentPadding: EdgeInsets.all(padding),
                   ),
                   onTapOutside: (_) {
                     widget.onCommit(_controller.text);
