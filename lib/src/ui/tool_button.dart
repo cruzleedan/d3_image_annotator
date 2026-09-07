@@ -230,15 +230,22 @@ class D3CloseButton extends StatelessWidget {
     super.key,
     required this.onPressed,
     this.tooltip = 'Close',
+    this.icon = Icons.close,
   });
 
   final VoidCallback? onPressed;
   final String tooltip;
 
+  /// Defaults to [Icons.close], unchanged from before this parameter
+  /// existed. A host that also offers a separate save-and-exit action
+  /// may prefer e.g. [Icons.arrow_back] here, so this button reads as
+  /// "go back" rather than a generic "close" alongside it.
+  final IconData icon;
+
   @override
   Widget build(BuildContext context) {
     return D3FloatingButton(
-      icon: Icons.close,
+      icon: icon,
       tooltip: tooltip,
       color: Colors.white,
       onPressed: onPressed,
