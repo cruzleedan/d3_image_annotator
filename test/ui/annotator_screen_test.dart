@@ -70,8 +70,8 @@ void main() {
       // selects it regardless of which drawing tool is active, so there
       // is no dedicated mode to switch into.
       expect(find.text('Select'), findsNothing);
-      expect(find.text('Draw'), findsWidgets);
-      expect(find.text('Adjust'), findsOneWidget);
+      expect(find.text('Mark up'), findsOneWidget);
+      expect(find.text('Edit photo'), findsOneWidget);
     });
 
     testWidgets('closeIcon overrides the default close glyph', (tester) async {
@@ -158,9 +158,9 @@ void main() {
       expect(find.text('Text'), findsNothing);
       // The Adjust group switcher itself is unrelated to AnnotationTool
       // and must still be offered.
-      expect(find.text('Adjust'), findsOneWidget);
+      expect(find.text('Edit photo'), findsOneWidget);
 
-      await tester.tap(find.text('Adjust'));
+      await tester.tap(find.text('Edit photo'));
       await tester.pumpAndSettle();
 
       expect(find.text('Crop'), findsOneWidget);
@@ -234,7 +234,7 @@ void main() {
       expect(find.text('Circle'), findsOneWidget);
       expect(find.text('Rotate'), findsNothing);
 
-      await tester.tap(find.text('Adjust'));
+      await tester.tap(find.text('Edit photo'));
       await tester.pumpAndSettle();
 
       expect(find.text('Rotate'), findsOneWidget);
@@ -246,7 +246,7 @@ void main() {
       // fixable without first navigating somewhere else.
       await pumpScreen(tester);
 
-      await tester.tap(find.text('Adjust'));
+      await tester.tap(find.text('Edit photo'));
       await tester.pumpAndSettle();
 
       expect(find.byIcon(Icons.undo), findsOneWidget);
@@ -259,7 +259,7 @@ void main() {
       tester,
     ) async {
       await pumpScreen(tester);
-      await tester.tap(find.text('Adjust'));
+      await tester.tap(find.text('Edit photo'));
       await tester.pumpAndSettle();
 
       await tester.tap(find.text('Crop'));
@@ -272,7 +272,7 @@ void main() {
 
     testWidgets('cancelling a crop applies nothing', (tester) async {
       final controller = await pumpScreen(tester);
-      await tester.tap(find.text('Adjust'));
+      await tester.tap(find.text('Edit photo'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Crop'));
       await tester.pumpAndSettle();
@@ -356,7 +356,7 @@ void main() {
         background: const AnnotationBackground.color(Colors.blue),
       );
 
-      expect(find.text('Adjust'), findsNothing,
+      expect(find.text('Edit photo'), findsNothing,
           reason: 'there is no image to crop, rotate, or mirror');
       expect(find.text('Draw'), findsWidgets,
           reason: 'the draw tools stay available');
@@ -373,7 +373,7 @@ void main() {
         background: AnnotationBackground.image(MemoryImage(_png)),
       );
 
-      expect(find.text('Adjust'), findsOneWidget);
+      expect(find.text('Edit photo'), findsOneWidget);
     });
 
     testWidgets(
@@ -388,7 +388,7 @@ void main() {
           background: AnnotationBackground.image(MemoryImage(_png)),
           controller: controller,
         );
-        await tester.tap(find.text('Adjust'));
+        await tester.tap(find.text('Edit photo'));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Crop'));
         await tester.pumpAndSettle();
@@ -404,7 +404,7 @@ void main() {
         expect(find.text('Apply crop'), findsNothing,
             reason: 'a crop frame floating over a plain fill would be '
                 'stranded UI with nothing left to act on');
-        expect(find.text('Adjust'), findsNothing);
+        expect(find.text('Edit photo'), findsNothing);
         expect(controller.transform.cropRect, isNull,
             reason: 'the in-progress crop was cancelled, not applied');
       },

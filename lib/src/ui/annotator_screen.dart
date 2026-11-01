@@ -407,8 +407,8 @@ class _BottomBars extends StatelessWidget {
             if (showAdjustGroup)
               D3ToolGroupBar<AnnotatorToolGroup>(
                 groups: const {
-                  AnnotatorToolGroup.draw: 'Draw',
-                  AnnotatorToolGroup.adjust: 'Adjust',
+                  AnnotatorToolGroup.draw: 'Mark up',
+                  AnnotatorToolGroup.adjust: 'Edit photo',
                 },
                 selected: effectiveGroup,
                 onSelected: onGroupChanged,

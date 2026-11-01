@@ -1,3 +1,7 @@
+## Unreleased
+
+* The mode switcher reads **Mark up** / **Edit photo** (was Draw / Adjust). 'Draw' also labels the freehand tool, and 'Adjust' did not say it edits the photo itself (crop, rotate, mirror).
+
 ## 0.1.0
 
 Initial release. Split out of `d3_camera`, where the annotation system
