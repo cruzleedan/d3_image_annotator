@@ -332,12 +332,12 @@ class _TopBar extends StatelessWidget {
           valueListenable: zoom,
           builder: (context, matrix, _) {
             final zoomed = matrix.getMaxScaleOnAxis() > 1.001;
-            return IconButton(
+            return D3FloatingButton(
+              icon: Icons.zoom_out_map,
               tooltip: 'Reset zoom',
-              onPressed: zoomed ? () => zoom.value = Matrix4.identity() : null,
+              caption: 'Zoom',
               color: Colors.white70,
-              disabledColor: Colors.white24,
-              icon: const Icon(Icons.zoom_out_map),
+              onPressed: zoomed ? () => zoom.value = Matrix4.identity() : null,
             );
           },
         ),

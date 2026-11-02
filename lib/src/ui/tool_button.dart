@@ -290,18 +290,21 @@ class D3HistoryBar extends StatelessWidget {
             D3FloatingButton(
               icon: Icons.undo,
               tooltip: 'Undo',
+              caption: 'Undo',
               color: foregroundColor,
               onPressed: controller.canUndo ? controller.undo : null,
             ),
             D3FloatingButton(
               icon: Icons.redo,
               tooltip: 'Redo',
+              caption: 'Redo',
               color: foregroundColor,
               onPressed: controller.canRedo ? controller.redo : null,
             ),
             D3FloatingButton(
               icon: Icons.delete_outline,
               tooltip: 'Clear all',
+              caption: 'Clear all',
               color: foregroundColor,
               onPressed: controller.isEmpty || hasSelection
                   ? null
@@ -339,12 +342,18 @@ class D3FloatingButton extends StatelessWidget {
     required this.tooltip,
     required this.color,
     required this.onPressed,
+    this.caption,
   });
 
   final IconData icon;
   final String tooltip;
   final Color color;
   final VoidCallback? onPressed;
+
+  /// A short visible label under the disc (for example "Undo"). The history
+  /// buttons use it because Clear all and Reset zoom are not self-evident from
+  /// their icons alone; floating shape controls leave it null.
+  final String? caption;
 
   @override
   Widget build(BuildContext context) {
@@ -364,22 +373,35 @@ class D3FloatingButton extends StatelessWidget {
               minHeight: kMinimumTouchTarget,
             ),
             child: Center(
-              child: SizedBox(
-                width: kMinimumTouchTarget * 0.6,
-                height: kMinimumTouchTarget * 0.6,
-                child: DecoratedBox(
-                  decoration: const BoxDecoration(
-                    color: Color(0x99000000),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Center(
-                    child: Icon(
-                      icon,
-                      color: onPressed == null ? Colors.white24 : color,
-                      size: 22,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: kMinimumTouchTarget * 0.6,
+                    height: kMinimumTouchTarget * 0.6,
+                    child: DecoratedBox(
+                      decoration: const BoxDecoration(
+                        color: Color(0x99000000),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(
+                        child: Icon(
+                          icon,
+                          color: onPressed == null ? Colors.white24 : color,
+                          size: 22,
+                        ),
+                      ),
                     ),
                   ),
-                ),
+                  if (caption != null)
+                    Text(
+                      caption!,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: onPressed == null ? Colors.white24 : color,
+                      ),
+                    ),
+                ],
               ),
             ),
           ),

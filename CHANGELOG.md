@@ -1,5 +1,6 @@
 ## Unreleased
 
+* The undo, redo, clear-all and reset-zoom buttons carry a short visible caption (Undo, Redo, Clear all, Zoom), since the trash and zoom icons were not self-evident. `D3FloatingButton` gains an optional `caption`.
 * The mode switcher reads **Mark up** / **Edit photo** (was Draw / Adjust). 'Draw' also labels the freehand tool, and 'Adjust' did not say it edits the photo itself (crop, rotate, mirror).
 
 ## 0.1.0
